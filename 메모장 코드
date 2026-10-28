@@ -1,0 +1,178 @@
+```html
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 식물 생육 분석</title>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 900px;
+            margin: 40px auto;
+            padding: 20px;
+            background: #f3f8f2;
+            color: #263b2a;
+        }
+
+        h1, h2 {
+            color: #267342;
+        }
+
+        .card {
+            background: white;
+            padding: 24px;
+            margin-bottom: 20px;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px #00000010;
+        }
+
+        label {
+            display: block;
+            margin-top: 15px;
+            margin-bottom: 6px;
+        }
+
+        input, button {
+            padding: 10px;
+            box-sizing: border-box;
+            max-width: 100%;
+        }
+
+        input[type="text"],
+        input[type="number"] {
+            width: 100%;
+        }
+
+        button {
+            margin-top: 20px;
+            background: #267342;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+
+        img {
+            max-width: 100%;
+            height: auto;
+            margin-top: 10px;
+            border-radius: 8px;
+        }
+
+        .results {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 15px;
+        }
+
+        .result-item {
+            background: #eef7ed;
+            padding: 15px;
+            border-radius: 8px;
+        }
+
+        .error {
+            color: #b00020;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>🌱 AI 식물 생육 분석</h1>
+    <p>식물 사진을 업로드해 초록색 영역의 크기와 면적을 분석합니다.</p>
+
+    <div class="card">
+        <h2>식물 사진 분석</h2>
+
+        <form method="POST" enctype="multipart/form-data">
+            <label for="plant_id">식물 이름</label>
+            <input
+                type="text"
+                id="plant_id"
+                name="plant_id"
+                value="{{ plant_id or '' }}"
+                placeholder="예: 바질"
+                required
+            >
+
+            <label for="pixel_ratio">픽셀 변환 비율 (cm/px)</label>
+            <input
+                type="number"
+                id="pixel_ratio"
+                name="pixel_ratio"
+                value="{{ pixel_ratio or 0.05 }}"
+                step="0.001"
+                min="0.001"
+                required
+            >
+
+            <label for="plant_image">식물 사진</label>
+            <input
+                type="file"
+                id="plant_image"
+                name="plant_image"
+                accept="image/*"
+                required
+            >
+
+            <button type="submit">식물 분석하기</button>
+        </form>
+    </div>
+
+    {% if error %}
+    <div class="card error">
+        <h2>분석 오류</h2>
+        <p>{{ error }}</p>
+    </div>
+    {% endif %}
+
+    {% if metrics %}
+    <div class="card">
+        <h2>{{ plant_id }} 분석 결과</h2>
+
+        <div class="results">
+            <div class="result-item">
+                <strong>높이</strong>
+                <p>{{ metrics.height_px }} px</p>
+                <p>{{ metrics.height_cm }} cm</p>
+            </div>
+
+            <div class="result-item">
+                <strong>너비</strong>
+                <p>{{ metrics.width_px }} px</p>
+                <p>{{ metrics.width_cm }} cm</p>
+            </div>
+
+            <div class="result-item">
+                <strong>초록색 영역 면적</strong>
+                <p>{{ metrics.projected_area_px }} px²</p>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if original_image %}
+    <div class="card">
+        <h2>원본 사진</h2>
+        <img src="data:image/jpeg;base64,{{ original_image }}" alt="원본 식물 사진">
+    </div>
+    {% endif %}
+
+    {% if mask_image %}
+    <div class="card">
+        <h2>초록색 영역 추출 결과</h2>
+        <img src="data:image/jpeg;base64,{{ mask_image }}" alt="초록색 영역 마스크">
+    </div>
+    {% endif %}
+
+    {% if result_image %}
+    <div class="card">
+        <h2>분석 시각화</h2>
+        <img src="data:image/jpeg;base64,{{ result_image }}" alt="식물 분석 결과">
+    </div>
+    {% endif %}
+</body>
+</html>
+```

@@ -4,3 +4,8 @@ python -m pip install streamlit opencv-python numpy pandas
   실행할 파일 이름 app.py로 변경 후
   
   python -m streamlit run app.py
+
+
+
+dir .\templates
+python app.py

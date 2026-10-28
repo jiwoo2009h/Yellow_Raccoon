@@ -1,1 +1,408 @@
-import 
+import cv2
+import numpy as np
+import pandas as pd
+import streamlit as st
+from datetime import datetime
+
+
+class PlantAnalyzer:
+    """컴퓨터 비전을 활용한 식물 생육 데이터 추출 클래스"""
+
+    def __init__(self, pixel_to_cm_ratio=0.05):
+        self.pixel_to_cm_ratio = pixel_to_cm_ratio
+
+        self.lower_green = np.array([30, 35, 35])
+        self.upper_green = np.array([85, 255, 255])
+
+    def set_hsv_bounds(self, lower, upper):
+        self.lower_green = np.array(lower)
+        self.upper_green = np.array(upper)
+
+    def set_pixel_ratio(self, ratio):
+        self.pixel_to_cm_ratio = ratio
+
+    def process_image(self, img):
+        """
+        업로드된 이미지를 분석하여
+        생육 지표, 분석 이미지, 마스크, 원본 이미지를 반환
+        """
+
+        if img is None:
+            raise ValueError("이미지를 읽을 수 없습니다.")
+
+        # 1. 이미지 전처리
+        blurred = cv2.GaussianBlur(img, (5, 5), 0)
+
+        # 2. HSV 색상 공간 변환
+        hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
+
+        # 3. 초록색 영역 추출
+        mask = cv2.inRange(
+            hsv,
+            self.lower_green,
+            self.upper_green
+        )
+
+        # 4. 노이즈 제거 및 빈 공간 보정
+        kernel = cv2.getStructuringElement(
+            cv2.MORPH_RECT,
+            (5, 5)
+        )
+
+        mask = cv2.morphologyEx(
+            mask,
+            cv2.MORPH_OPEN,
+            kernel
+        )
+
+        mask = cv2.morphologyEx(
+            mask,
+            cv2.MORPH_CLOSE,
+            kernel
+        )
+
+        # 5. 윤곽선 추출
+        contours, _ = cv2.findContours(
+            mask.copy(),
+            cv2.RETR_EXTERNAL,
+            cv2.CHAIN_APPROX_SIMPLE
+        )
+
+        # 분석 결과 이미지
+        result_img = img.copy()
+
+        metrics = {
+            "height_px": 0,
+            "width_px": 0,
+            "height_cm": 0.0,
+            "width_cm": 0.0,
+            "projected_area_px": 0
+        }
+
+        if contours:
+            # 가장 큰 윤곽선을 대표 식물 영역으로 선택
+            main_contour = max(
+                contours,
+                key=cv2.contourArea
+            )
+
+            x, y, w, h = cv2.boundingRect(main_contour)
+
+            # 생육 지표 계산
+            metrics = {
+                "height_px": h,
+                "width_px": w,
+                "height_cm": round(
+                    h * self.pixel_to_cm_ratio, 2
+                ),
+                "width_cm": round(
+                    w * self.pixel_to_cm_ratio, 2
+                ),
+                "projected_area_px": int(
+                    cv2.countNonZero(mask)
+                )
+            }
+
+            # 검출 영역 표시
+            cv2.rectangle(
+                result_img,
+                (x, y),
+                (x + w, y + h),
+                (0, 255, 0),
+                2
+            )
+
+            cv2.drawContours(
+                result_img,
+                [main_contour],
+                -1,
+                (0, 0,255),
+                2
+            )
+
+            # 측정값 표시
+            label = (
+                f"H: {metrics['height_cm']:.1f} cm, "
+                f"W: {metrics['width_cm']:.1f} cm"
+            )
+
+            cv2.putText(
+                result_img,
+                label,
+                (x, max(y - 10, 20)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (0, 255, 0),
+                2
+            )
+
+        return metrics, result_img, mask, img
+
+
+class GardeningAssistant:
+    """생육 데이터와 환경 데이터를 활용하는 관리 추천 클래스"""
+
+    @staticmethod
+    def calculate_growth_rate(
+        current_val,
+        previous_val,
+        days_diff
+    ):
+        if days_diff <= 0:
+            return None
+
+        return round(
+            (current_val - previous_val) / days_diff,
+            3
+        )
+
+    @staticmethod
+    def evaluate_plant_status(
+        growth_rate,
+        soil_moisture=None,
+        illuminance=None,
+        temp=None,
+        humidity=None
+    ):
+        recommendations = []
+
+        if growth_rate is None:
+            recommendations.append(
+                "생장률을 계산하려면 이전 측정 데이터가 필요합니다."
+            )
+        elif growth_rate < 0:
+            recommendations.append(
+                "측정된 생육 지표가 감소했습니다. "
+                "원본 사진과 식물 영역 추출 결과를 확인하세요."
+            )
+        elif growth_rate == 0:
+            recommendations.append(
+                "생육 지표에 변화가 없습니다. "
+                "추가 관찰을 통해 추세를 확인하세요."
+            )
+        else:
+            recommendations.append(
+                "측정된 생육 지표가 증가했습니다. "
+                "현재 관리 상태를 계속 관찰하세요."
+            )
+
+        if temp is None or humidity is None:
+            recommendations.append(
+                "온도와 습도 데이터가 없어 "
+                "환경 분석을 완료할 수 없습니다."
+            )
+
+        return " | ".join(recommendations)
+
+
+# =========================================================
+# Streamlit 웹 화면
+# =========================================================
+
+st.set_page_config(
+    page_title="식물 생육 분석 시스템",
+    page_icon="🌱",
+    layout="wide"
+)
+
+st.title("🌱 식물 생육 분석 및 관리 추천 시스템")
+
+st.write(
+    "식물 사진을 업로드하면 OpenCV를 이용해 "
+    "식물 영역을 추출하고 생육 지표를 계산합니다."
+)
+
+st.divider()
+
+# 1. 분석 설정
+st.subheader("1. 분석 설정")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    plant_id = st.text_input(
+        "식물 ID",
+        value="basil"
+    )
+
+with col2:
+    pixel_ratio = st.number_input(
+        "픽셀당 실제 길이 (cm/pixel)",
+        min_value=0.0001,
+        max_value=10.0,
+        value=0.05,
+        step=0.01,
+        format="%.4f",
+        help="자 등으로 실제 길이를 보정한 값을 입력하세요."
+    )
+
+# 2. 이미지 업로드
+st.subheader("2. 식물 사진 업로드")
+
+uploaded_file = st.file_uploader(
+    "분석할 식물 사진을 선택하세요.",
+    type=["jpg", "jpeg", "png"],
+    help="JPG, JPEG, PNG 파일을 업로드할 수 있습니다."
+)
+
+if uploaded_file is not None:
+
+    # 업로드한 이미지의 바이트 데이터를 OpenCV 형식으로 변환
+    file_bytes = np.frombuffer(
+        uploaded_file.getvalue(),
+        dtype=np.uint8
+    )
+
+    image = cv2.imdecode(
+        file_bytes,
+        cv2.IMREAD_COLOR
+    )
+
+    if image is None:
+        st.error(
+            "이미지를 불러오지 못했습니다. "
+            "다른 이미지 파일을 선택해 주세요."
+        )
+
+    else:
+        # 분석 버튼을 눌렀을 때 실행
+        if st.button(
+            "식물 이미지 분석하기",
+            type="primary"
+        ):
+
+            analyzer = PlantAnalyzer(
+                pixel_to_cm_ratio=pixel_ratio
+            )
+
+            try:
+                with st.spinner("이미지를 분석하고 있습니다..."):
+
+                    metrics, processed_img, mask, original_img = (
+                        analyzer.process_image(image)
+                    )
+
+                # 분석 결과 저장
+                st.session_state["metrics"] = metrics
+                st.session_state["processed_img"] = processed_img
+                st.session_state["mask"] = mask
+                st.session_state["original_img"] = original_img
+                st.session_state["plant_id"] = plant_id
+                st.session_state["filename"] = uploaded_file.name
+
+            except Exception as e:
+                st.error(f"이미지 분석 중 오류가 발생했습니다: {e}")
+
+        # 분석이 완료된 경우 결과 표시
+        if "metrics" in st.session_state:
+
+            metrics = st.session_state["metrics"]
+
+            st.divider()
+            st.subheader("3. 이미지 분석 결과")
+
+            col1, col2, col3 = st.columns(3)
+
+            with col1:
+                st.image(
+                    cv2.cvtColor(
+                        st.session_state["original_img"],
+                        cv2.COLOR_BGR2RGB
+                    ),
+                    caption="원본 이미지",
+                    use_container_width=True
+                )
+
+            with col2:
+                st.image(
+                    st.session_state["mask"],
+                    caption="식물 영역 마스크",
+                    clamp=True,
+                    use_container_width=True
+                )
+
+            with col3:
+                st.image(
+                    cv2.cvtColor(
+                        st.session_state["processed_img"],
+                        cv2.COLOR_BGR2RGB
+                    ),
+                    caption="윤곽선 검출 결과",
+                    use_container_width=True
+                )
+
+            st.divider()
+            st.subheader("4. 추출된 생육 지표")
+
+            c1, c2, c3 = st.columns(3)
+
+            c1.metric(
+                "식물 높이",
+                f"{metrics['height_cm']} cm"
+            )
+
+            c2.metric(
+                "식물 너비",
+                f"{metrics['width_cm']} cm"
+            )
+
+            c3.metric(
+                "투영 면적",
+                f"{metrics['projected_area_px']:,} px²"
+            )
+
+            with st.expander("픽셀 단위 측정값 확인"):
+                st.write(
+                    f"높이: {metrics['height_px']} px"
+                )
+                st.write(
+                    f"너비: {metrics['width_px']} px"
+                )
+
+            st.caption(
+                "주의: 실제 길이 환산값은 촬영 환경과 "
+                "픽셀 보정값에 따라 달라집니다. "
+                "투영 면적은 사진에서 추출한 픽셀 수입니다."
+            )
+
+            # 5. 측정 결과를 CSV로 저장할 수 있도록 구성
+            st.divider()
+            st.subheader("5. 분석 결과 저장")
+
+            if st.button("분석 결과 저장용 데이터 생성"):
+
+                result_df = pd.DataFrame([{
+                    "날짜": datetime.now().strftime("%Y-%m-%d"),
+                    "식물ID": st.session_state["plant_id"],
+                    "파일명": st.session_state["filename"],
+                    "높이(px)": metrics["height_px"],
+                    "너비(px)": metrics["width_px"],
+                    "높이(cm)": metrics["height_cm"],
+                    "너비(cm)": metrics["width_cm"],
+                    "투영면적(px²)": metrics["projected_area_px"]
+                }])
+
+                st.session_state["result_df"] = result_df
+
+            if "result_df" in st.session_state:
+
+                st.dataframe(
+                    st.session_state["result_df"],
+                    use_container_width=True
+                )
+
+                csv_data = st.session_state["result_df"].to_csv(
+                    index=False
+                ).encode("utf-8-sig")
+
+                st.download_button(
+                    label="CSV 파일 다운로드",
+                    data=csv_data,
+                    file_name="plant_growth_data.csv",
+                    mime="text/csv"
+                )
+
+else:
+    st.info(
+        "위의 파일 선택 버튼을 눌러 식물 사진을 업로드하세요."
+    )

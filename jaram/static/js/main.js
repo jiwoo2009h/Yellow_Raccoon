@@ -2,6 +2,8 @@
 
 import { h, icons, toast } from './ui.js';
 import { applyTheme } from './theme.js';
+import { api } from './api.js';
+import { loginView } from './views/login.js';
 import { homeView } from './views/home.js';
 import { plantView } from './views/plant.js';
 import { captureView, pickPlantAndCapture } from './views/capture.js';
@@ -55,6 +57,7 @@ function renderTabbar(active) {
 }
 
 async function router() {
+  if (showingLogin) return;
   const path = (location.hash.slice(1) || '/').split('?')[0];
   const found = match(path) || match('/');
   if (typeof cleanup === 'function') {
@@ -73,6 +76,7 @@ async function router() {
       if (result.className) screen.className = 'screen ' + result.className;
     }
   } catch (err) {
+    if (err.status === 401) return; // 로그인 화면이 대신 표시됨
     console.error(err);
     screen.replaceChildren(
       h('div', { class: 'empty' },
@@ -90,8 +94,22 @@ window.addEventListener('hashchange', () => {
 });
 
 window.addEventListener('unhandledrejection', (e) => {
-  if (e.reason && e.reason.message) toast(e.reason.message, { error: true });
+  if (e.reason && e.reason.message && e.reason.status !== 401) toast(e.reason.message, { error: true });
 });
 
+// 로그인이 필요하면 (서버에 팀 비밀번호가 설정된 경우) 로그인 화면부터
+let showingLogin = false;
+function showLogin() {
+  if (showingLogin) return;
+  showingLogin = true;
+  if (typeof cleanup === 'function') { try { cleanup(); } catch { /* 무시 */ } }
+  cleanup = null;
+  document.getElementById('layer').querySelectorAll('.backdrop').forEach((b) => b.remove());
+  loginView(() => { showingLogin = false; router(); });
+}
+window.addEventListener('jaram:login-required', showLogin);
+
 applyTheme();
-router();
+api.auth()
+  .then((a) => (a.required && !a.authenticated ? showLogin() : router()))
+  .catch(() => router());

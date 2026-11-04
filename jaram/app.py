@@ -2,21 +2,33 @@
 
 실행:  python app.py            → 같은 와이파이의 휴대폰에서 http://<컴퓨터IP>:5000 접속
        python app.py --https    → 휴대폰에서 실시간 카메라(이전 사진 겹쳐 보기)까지 사용
+
+환경 변수
+  JARAM_DATA           데이터(DB·사진) 폴더. 기본값: 이 폴더의 data/
+  JARAM_PASSWORD       설정하면 팀 비밀번호로 로그인해야 쓸 수 있어요. 인터넷에 배포할 때는 꼭 설정하세요.
+  JARAM_SECRET_KEY     로그인 쿠키 서명 키. 없으면 데이터 폴더에 자동으로 만들어 저장해요.
+  JARAM_SECURE_COOKIE  1 이면 HTTPS 에서만 로그인 쿠키를 보내요. HTTPS 로 배포할 때 설정하세요.
 """
 
 import argparse
 import csv
+import hmac
 import io
 import json
 import math
 import os
 import re
+import secrets
 import socket
+import sqlite3
+import tempfile
+import time
 import uuid
+import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from flask import Flask, Response, g, jsonify, request, send_from_directory
+from flask import Flask, Response, g, jsonify, request, send_file, send_from_directory, session
 
 import db
 from growth import parse_time, with_units
@@ -109,6 +121,20 @@ def safe_code(value):
     return re.sub(r"[^A-Za-z0-9_-]", "", value or "")[:12]
 
 
+def load_secret_key(data_dir):
+    """로그인 쿠키 서명 키. 서버를 다시 켜도 로그인이 유지되도록 파일에 저장합니다."""
+    path = Path(data_dir) / "secret_key"
+    if path.exists():
+        return path.read_text().strip()
+    key = secrets.token_hex(32)
+    path.write_text(key)
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+    return key
+
+
 def lan_ip():
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
@@ -122,7 +148,7 @@ def lan_ip():
 # 앱
 # ----------------------------------------------------------------------
 
-def create_app(data_dir=None):
+def create_app(data_dir=None, password=None):
     app = Flask(__name__, static_folder="static", static_url_path="/static")
     data_dir = Path(data_dir or os.environ.get("JARAM_DATA") or BASE_DIR / "data")
     upload_dir = data_dir / "uploads"
@@ -133,9 +159,71 @@ def create_app(data_dir=None):
         UPLOAD_DIR=upload_dir,
         MAX_CONTENT_LENGTH=20 * 1024 * 1024,
         JSON_AS_ASCII=False,
+        PASSWORD=password if password is not None else (os.environ.get("JARAM_PASSWORD") or None),
+        SECRET_KEY=os.environ.get("JARAM_SECRET_KEY") or load_secret_key(data_dir),
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE="Lax",
+        SESSION_COOKIE_SECURE=os.environ.get("JARAM_SECURE_COOKIE") == "1",
+        PERMANENT_SESSION_LIFETIME=timedelta(days=180),
     )
     app.json.ensure_ascii = False
     db.init(app.config["DB_PATH"])
+
+    # ---------------- 팀 비밀번호 로그인 ----------------
+    # JARAM_PASSWORD 가 있을 때만 동작합니다. (같은 와이파이에서만 쓸 때는 로그인 없이 사용)
+    login_failures = {}
+
+    def auth_required():
+        return bool(app.config["PASSWORD"])
+
+    @app.before_request
+    def require_login():
+        if not auth_required():
+            return None
+        path = request.path
+        if not (path.startswith("/api/") or path.startswith("/media/")):
+            return None  # 화면 파일(HTML·CSS·JS)에는 기록이 없으니 공개
+        if path in ("/api/auth", "/api/login"):
+            return None
+        if not session.get("auth"):
+            return jsonify(error="로그인이 필요해요.", auth_required=True), 401
+        # 다른 사이트에서 몰래 요청을 보내는 것(CSRF)을 막기 위해 앱이 붙이는 헤더를 확인
+        if request.method not in ("GET", "HEAD", "OPTIONS") and request.headers.get("X-Requested-With") != "jaram":
+            return jsonify(error="잘못된 요청이에요."), 403
+        return None
+
+    @app.get("/api/auth")
+    def auth_status():
+        return jsonify(required=auth_required(), authenticated=not auth_required() or bool(session.get("auth")))
+
+    @app.post("/api/login")
+    def login():
+        if not auth_required():
+            return jsonify(ok=True)
+        if request.headers.get("X-Requested-With") != "jaram":
+            return jsonify(error="잘못된 요청이에요."), 403
+        ip = request.headers.get("X-Real-IP") or request.remote_addr or "?"
+        now = time.time()
+        fails, since = login_failures.get(ip, (0, now))
+        if now - since > 600:
+            fails, since = 0, now
+        if fails >= 10:
+            return jsonify(error="비밀번호를 너무 많이 틀렸어요. 10분 뒤에 다시 시도해 주세요."), 429
+        given = str((request.get_json(silent=True) or {}).get("password") or "")
+        if hmac.compare_digest(given.encode("utf-8"), app.config["PASSWORD"].encode("utf-8")):
+            login_failures.pop(ip, None)
+            session.clear()
+            session.permanent = True
+            session["auth"] = True
+            return jsonify(ok=True)
+        login_failures[ip] = (fails + 1, since)
+        time.sleep(0.4)
+        return jsonify(error="비밀번호가 맞지 않아요."), 401
+
+    @app.post("/api/logout")
+    def logout():
+        session.clear()
+        return jsonify(ok=True)
 
     # ---------------- DB 연결 ----------------
     def conn():
@@ -715,6 +803,42 @@ def create_app(data_dir=None):
         return Response(data, mimetype="text/csv; charset=utf-8",
                         headers={"Content-Disposition": f"attachment; filename={filename}"})
 
+    @app.get("/api/backup.zip")
+    def backup():
+        """DB + 모든 사진을 zip 하나로. 압축을 풀어 데이터 폴더에 넣으면 그대로 복원돼요."""
+        fd, zip_path = tempfile.mkstemp(suffix=".zip")
+        os.close(fd)
+        db_copy = zip_path + ".db"
+        try:
+            # 쓰는 중이어도 안전하게 복사되도록 SQLite 백업 기능 사용
+            src = sqlite3.connect(app.config["DB_PATH"])
+            dst = sqlite3.connect(db_copy)
+            with dst:
+                src.backup(dst)
+            src.close()
+            dst.close()
+            with zipfile.ZipFile(zip_path, "w") as z:
+                z.write(db_copy, "jaram.db", compress_type=zipfile.ZIP_DEFLATED)
+                for f in sorted(app.config["UPLOAD_DIR"].rglob("*")):
+                    if f.is_file():
+                        # 사진은 이미 압축된 형식이라 그대로 저장 (서버 CPU 절약)
+                        z.write(f, "uploads/" + f.relative_to(app.config["UPLOAD_DIR"]).as_posix(),
+                                compress_type=zipfile.ZIP_STORED)
+        finally:
+            if os.path.exists(db_copy):
+                os.unlink(db_copy)
+        response = send_file(zip_path, mimetype="application/zip", as_attachment=True,
+                             download_name=f"jaram_backup_{datetime.now():%Y%m%d}.zip")
+
+        @response.call_on_close
+        def remove_zip():
+            try:
+                os.unlink(zip_path)
+            except OSError:
+                pass
+
+        return response
+
     return app
 
 
@@ -731,7 +855,8 @@ def main():
     scheme = "https" if args.https else "http"
     print("\n  🌱 자람 서버가 시작됐어요")
     print(f"     이 컴퓨터:  {scheme}://127.0.0.1:{args.port}")
-    print(f"     휴대폰:     {scheme}://{lan_ip()}:{args.port}  (같은 와이파이에 연결)\n")
+    print(f"     휴대폰:     {scheme}://{lan_ip()}:{args.port}  (같은 와이파이에 연결)")
+    print("     로그인:     " + ("팀 비밀번호 필요" if app.config["PASSWORD"] else "없음 (JARAM_PASSWORD 로 설정 가능)") + "\n")
     app.run(host=args.host, port=args.port, debug=args.debug,
             ssl_context="adhoc" if args.https else None)
 

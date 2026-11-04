@@ -14,7 +14,7 @@ export async function settingsView() {
   const screen = document.getElementById('screen');
   const head = h('div', { class: 'page-head' }, h('h1', { class: 'large-title' }, '설정'));
   screen.append(head, skeleton(80, 16), skeleton(200));
-  const { thresholds } = await api.settings();
+  const [{ thresholds }, auth] = await Promise.all([api.settings(), api.auth()]);
   const sp = thresholds.species;
   const desc = (t) => `온도 ${fmt(t.temp_min)}–${fmt(t.temp_max)}℃ · 토양 ${fmt(t.soil_min, 0)}% 이상 · 조도 ${fmt(t.lux_min, 0)} lux 이상`;
 
@@ -35,6 +35,9 @@ export async function settingsView() {
       h('a', { class: 'list-item', href: '/api/export.csv', download: '' },
         h('div', { class: 'list-icon', html: icons.download }),
         h('div', { class: 'grow' }, h('div', { class: 'title' }, 'CSV로 내보내기'), h('div', { class: 'meta' }, '모든 측정·환경·관리 기록'))),
+      h('a', { class: 'list-item', href: api.backupUrl, download: '' },
+        h('div', { class: 'list-icon', html: icons.download }),
+        h('div', { class: 'grow' }, h('div', { class: 'title' }, '전체 백업 받기'), h('div', { class: 'meta' }, 'DB와 모든 사진을 zip 파일 하나로'))),
       row({
         icon: 'refresh', title: '모든 사진 다시 분석', meta: '색상(HSV) 범위를 바꾼 뒤 사용하세요',
         onClick: async () => {
@@ -47,7 +50,16 @@ export async function settingsView() {
       })),
     h('h2', { class: 'section-title' }, '정보'),
     h('div', { class: 'list' },
-      row({ href: '#/settings/algorithm', icon: 'book', title: '추천 알고리즘 살펴보기', meta: '상태 판단 규칙과 생장률 계산 방법' })),
+      row({ href: '#/settings/algorithm', icon: 'book', title: '추천 알고리즘 살펴보기', meta: '상태 판단 규칙과 생장률 계산 방법' }),
+      auth.required ? row({
+        icon: 'close', title: '로그아웃', meta: '이 휴대폰에서 팀 비밀번호 로그인을 해제해요',
+        onClick: async () => {
+          const ok = await confirmSheet({ title: '로그아웃할까요?', desc: '다시 들어오려면 팀 비밀번호가 필요해요.', ok: '로그아웃' });
+          if (!ok) return;
+          await api.logout();
+          window.dispatchEvent(new CustomEvent('jaram:login-required'));
+        },
+      }) : null),
     h('p', { class: 'footer-note' }, '자람 v1.0 · 컴퓨터 비전 기반 식물 생육 분석 및 맞춤형 관리 추천 시스템', h('br'), '2026 과학과제연구 · 바티칸 시국'));
 }
 

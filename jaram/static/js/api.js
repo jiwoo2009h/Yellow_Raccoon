@@ -1,7 +1,8 @@
 // 서버(Flask) API 호출
 
 async function request(method, url, body, { form = false } = {}) {
-  const opts = { method, headers: {} };
+  // X-Requested-With: 서버가 '이 앱에서 보낸 요청'인지 확인하는 표시 (CSRF 방지)
+  const opts = { method, headers: { 'X-Requested-With': 'jaram' } };
   if (body !== undefined) {
     if (form) opts.body = body;
     else {
@@ -13,9 +14,13 @@ async function request(method, url, body, { form = false } = {}) {
   try {
     res = await fetch(url, opts);
   } catch (e) {
-    throw new Error('서버에 연결할 수 없어요. 컴퓨터에서 서버가 켜져 있는지 확인해 주세요.');
+    throw new Error('서버에 연결할 수 없어요. 인터넷 연결이나 서버가 켜져 있는지 확인해 주세요.');
   }
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && data.auth_required) {
+    // 로그인이 풀렸으면 로그인 화면으로
+    window.dispatchEvent(new CustomEvent('jaram:login-required'));
+  }
   if (!res.ok) {
     const err = new Error(data.error || `요청에 실패했어요 (${res.status})`);
     err.status = res.status;
@@ -25,6 +30,9 @@ async function request(method, url, body, { form = false } = {}) {
 }
 
 export const api = {
+  auth: () => request('GET', '/api/auth'),
+  login: (password) => request('POST', '/api/login', { password }),
+  logout: () => request('POST', '/api/logout'),
   plants: () => request('GET', '/api/plants'),
   plant: (id) => request('GET', `/api/plants/${id}`),
   createPlant: (body) => request('POST', '/api/plants', body),
@@ -48,4 +56,5 @@ export const api = {
   saveSettings: (thresholds) => request('PUT', '/api/settings', { thresholds }),
   resetSettings: () => request('POST', '/api/settings/reset'),
   report: () => request('GET', '/api/report'),
+  backupUrl: '/api/backup.zip',
 };

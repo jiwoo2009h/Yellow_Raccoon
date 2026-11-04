@@ -682,4 +682,7 @@ table.data tr:last-child td { border-bottom: 0; }
 .hsv-bar { height: 14px; border-radius: 7px; margin-top: 8px; position: relative; overflow: hidden; }
 .hsv-bar .sel { position: absolute; top: 0; bottom: 0; border: 2px solid var(--text-1); border-radius: 7px; }
 
+.login { padding-top: 12vh; }
+.login-logo { width: 72px; height: 72px; border-radius: 20px; margin: 0 auto 20px; }
+
 .footer-note { text-align: center; font-size: 13px; color: var(--text-4); margin-top: 32px; }

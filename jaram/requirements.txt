@@ -1,0 +1,8 @@
+flask>=3.0
+opencv-python-headless>=4.8
+numpy>=1.26
+pillow>=10.0
+# 휴대폰에서 실시간 카메라(지난 사진 겹쳐 보기)를 쓰려면 HTTPS 실행용으로 필요
+cryptography>=42
+# 테스트용
+pytest>=8.0

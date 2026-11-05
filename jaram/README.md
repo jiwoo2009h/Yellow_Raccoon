@@ -113,6 +113,7 @@ jaram/
 ├── static/           모바일 웹 화면 (HTML·CSS·JS, 빌드 과정 없음)
 │   ├── css/app.css   디자인 시스템 (라이트/다크 색상 토큰)
 │   └── js/           화면(views), 차트, 카메라, API
+├── design/figma/     Figma 플러그인: 앱 화면을 오토레이아웃 디자인으로 만들기 (README 참고)
 ├── tests/            pytest 테스트
 └── data/             ← 실행하면 생김: jaram.db + uploads/(사진). 깃에 올라가지 않으니 따로 백업하세요.
 ```

@@ -3,3 +3,6 @@ data/
 data-demo/
 __pycache__/
 .pytest_cache/
+
+# Figma 데이터 생성 중간 파일
+design/figma/data.json

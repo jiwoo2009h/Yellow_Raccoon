@@ -770,3 +770,7 @@ table.data tr:last-child td { border-bottom: 0; }
 .cmp-bar.yes { background: var(--accent); }
 .cmp-bar.no { background: var(--text-3); }
 .cmp-val { font-size: 14px; font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; color: var(--text-1); }
+
+/* ---------------- 알고리즘 설명 ---------------- */
+.algo-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 8px; color: var(--text-2); font-size: 15px; line-height: 1.55; }
+.algo-list li::marker { color: var(--accent); }

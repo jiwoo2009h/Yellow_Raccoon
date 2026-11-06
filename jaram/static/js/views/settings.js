@@ -305,43 +305,90 @@ export async function generalSettingsView() {
 export async function algorithmView() {
   const screen = document.getElementById('screen');
   const { thresholds } = await api.settings();
+  const g = thresholds.general;
   const b = thresholds.species.basil;
   const l = thresholds.species.lettuce;
-  const both = (k, unit = '') => `바질 ${fmt(b[k], 0)}${unit} / 상추 ${fmt(l[k], 0)}${unit}`;
-  const flow = ['사진 입력', '생육 지표 추출', '환경 데이터', '생장률 계산', '조건 비교', '상태 판단', '관리 추천'];
+  const both = (k, unit = '', d = 0) => `바질 ${fmt(b[k], d)}${unit} / 상추 ${fmt(l[k], d)}${unit}`;
+  const flow = ['사진 입력', '영상 분석', '3D 측정(선택)', '환경 데이터', '생장률 계산', '조건 비교', '상태 판단', '관리 추천'];
   const rules = [
-    [`토양 수분 < ${both('soil_min', '%')}  그리고  최근 생장률 감소`, '수분 부족 가능성 → 물주기 확인', 'care'],
-    ['토양 수분은 낮지만 높이·면적은 계속 증가', '바로 판단하지 않고 관찰', 'observe'],
-    [`조도 < ${both('lux_min', ' lux')} 가 지속  그리고  생장률 감소`, '광환경 부족 가능성 → 위치·조명 확인', 'care'],
-    ['온도·습도가 범위 밖으로 지속  그리고  생장 증가량 감소', '환경 조건 확인 필요', 'care'],
-    [`토양 수분 > ${both('soil_max', '%')} 가 지속  그리고  생장률 감소`, '과습 가능성 → 물 주는 간격 늘리기', 'care'],
+    [`토양 수분 < ${both('soil_min', '%')}  그리고  생장 감소`, '수분 부족 가능성 → 물주기 확인', 'care'],
+    ['토양 수분은 낮지만 잘 자라는 중', '바로 판단하지 않고 관찰', 'observe'],
+    [`조도 < ${both('lux_min', ' lux')} 가 지속  그리고  생장 감소`, '광환경 부족 가능성 → 위치·조명 확인', 'care'],
+    ['온도·습도가 범위 밖으로 지속  그리고  생장 감소', '환경 조건 확인 필요', 'care'],
+    [`토양 수분 > ${both('soil_max', '%')} 가 지속  그리고  생장 감소`, '과습 가능성 → 물 주는 간격 늘리기', 'care'],
     [`한 번에 투영 면적이 ${fmt(b.drop_alert, 0)}% 이상 감소`, '시듦 또는 촬영 오류 확인', 'observe'],
-    ['생장률이 감소했지만 환경으로 설명되지 않음', '원인 불명 → 관찰', 'observe'],
-    ['환경 조건이 안정적  그리고  높이·면적이 계속 증가', '현재 관리 환경 유지', 'good'],
+    [`잎 평균 색(Hue)이 처음보다 ${fmt(b.hue_drop, 0)} 이상 노란 쪽으로`, '조명 조건·과습·빛·양분 확인', 'observe'],
+    ['정면 사진과 3D 측정의 생장 판단이 엇갈림', '촬영 각도·높이 확인 (3D 결과 우선)', 'observe'],
+    ['생장이 감소했지만 환경으로 설명되지 않음', '원인 불명 → 관찰', 'observe'],
+    ['환경 조건이 안정적  그리고  계속 잘 자람', '현재 관리 환경 유지', 'good'],
   ];
   const label = { care: '관리 필요', observe: '관찰 필요', good: '정상 생육' };
+  const bullets = (items) => h('ul', { class: 'algo-list' }, items.map((x) => h('li', null, x)));
+  const formula = (name, expr) => h('div', null, h('div', { class: 'field-label' }, name), h('div', { class: 'num' }, expr));
   screen.replaceChildren(
     topbar({ title: '' }),
     h('div', { class: 'page-head', style: { paddingTop: '8px' } }, h('div', null,
       h('h1', { class: 'large-title' }, '추천 알고리즘'),
       h('p', { class: 'subtitle' }, '규칙 기반(IF → THEN)으로 판단해서 왜 그런 추천이 나왔는지 설명할 수 있어요.'))),
     h('h2', { class: 'section-title' }, '처리 과정'),
-    h('section', { class: 'card' }, h('div', { class: 'flow' }, flow.flatMap((s, i) => [i ? h('span', { class: 'arrow' }, '→') : null, h('span', { class: 'step' }, s)]))),
+    h('section', { class: 'card' }, h('div', { class: 'flow' }, flow.flatMap((x, i) => [i ? h('span', { class: 'arrow' }, '→') : null, h('span', { class: 'step' }, x)]))),
+
+    h('h2', { class: 'section-title' }, '영상 분석'),
+    h('section', { class: 'card' }, bullets([
+      '사진 긴 변을 1280px로 맞추고 흐림 처리로 잡음을 줄여요.',
+      'HSV 색 공간에서 종류별 초록 범위만 남긴 뒤, Opening(잡음 제거)과 Closing(빈틈 메우기)을 해요.',
+      '가장 큰 초록 덩어리와 그 근처 잎 조각을 한 식물로 묶어 높이·폭(경계 상자)과 투영 면적(초록 픽셀 수)을 재요.',
+      '분석 영역을 지정하면 영역 밖 초록색(옆 화분 잎, 소품)은 빼고 분석해요.',
+      '사진 속 자로 크기를 보정하면 cm 단위로 바꿔요. 생장률(%)은 단위와 관계없이 같아요.',
+    ])),
+
     h('h2', { class: 'section-title' }, '생장률 계산'),
     h('section', { class: 'card stack' },
-      h('div', null, h('div', { class: 'field-label' }, '변화량'), h('div', { class: 'num' }, 'X₂ − X₁')),
-      h('div', null, h('div', { class: 'field-label' }, '생장률 (하루당)'), h('div', { class: 'num' }, '(X₂ − X₁) ÷ (t₂ − t₁)')),
-      h('div', null, h('div', { class: 'field-label' }, '상대 생장률 (%/일)'), h('div', { class: 'num' }, '(X₂ − X₁) ÷ X₁ × 100 ÷ (t₂ − t₁)')),
-      h('p', { class: 'caption', style: { margin: 0 } }, `X는 투영 면적·높이·폭, t는 촬영 시각이에요. 최근 ${thresholds.general.rate_window}구간과 그 이전 ${thresholds.general.rate_window}구간의 생장률을 비교해서 생장이 느려졌는지 판단해요.`)),
+      formula('변화량', 'X₂ − X₁'),
+      formula('생장률 (하루당)', '(X₂ − X₁) ÷ (t₂ − t₁)'),
+      formula('상대 생장률 (%/일)', '(X₂ − X₁) ÷ X₁ × 100 ÷ (t₂ − t₁)'),
+      h('p', { class: 'caption', style: { margin: 0 } }, `X는 투영 면적·높이·폭, t는 촬영 시각이에요. 최근 ${g.rate_window}구간과 그 이전 ${g.rate_window}구간의 생장률을 비교해서 생장이 느려졌는지 판단해요. 면적 생장률이 이전보다 ${fmt(b.slowdown_ratio, 0)}% 넘게 줄면 '둔화', 하루 ${fmt(b.stagnation_rate)}%보다 낮으면 '정체'예요.`)),
+
+    h('h2', { class: 'section-title' }, '3D 측정'),
+    h('section', { class: 'card stack' },
+      bullets([
+        '식물 둘레를 돌며 0°·90°·180°·270°(+위) 사진을 찍으면, 모든 사진에서 식물 안쪽인 공간만 남겨 3D 영역을 만들어요(시각 헐).',
+        '손으로 들고 찍어 생기는 거리 차이는 식물 높이를 0° 사진에 맞춰 보정하고, 회전축 위치는 부피가 가장 커지는 곳으로 맞춰요.',
+        '위 사진은 8가지 방향 중 옆 사진과 가장 잘 맞는 방향을 골라 쓰고, 잘 맞지 않으면 빼고 계산해요.',
+      ]),
+      formula('하루 평균 부피 생장률 (%/일)', '((V₂ ÷ V₁)^(1 ÷ 일수) − 1) × 100'),
+      h('p', { class: 'caption', style: { margin: 0 } },
+        `3D 측정은 1주 간격이라 몇 배씩 커지므로 하루하루 같은 비율로 자랐다고 보고 계산해요. 최근 3D 측정이 2번 이상(마지막이 ${fmt(g.scan_max_age_days, 0)}일 안, 최근 사진 구간과 겹침)이면 부피로 먼저 판단하고 정면 사진은 보조 근거로 써요. 부피 정체 기준은 하루 ${fmt(b.volume_stagnation_rate)}%, 둔화 기준은 ${fmt(b.volume_slowdown_ratio, 0)}%예요.`),
+      h('p', { class: 'caption', style: { margin: 0 } }, '잎 사이 빈 곳까지 채워져 부피가 실제보다 크게 나오므로, 같은 방식으로 찍은 측정끼리의 변화율로 판단해요.')),
+
     h('h2', { class: 'section-title' }, '판단 규칙'),
     h('section', { class: 'card' }, rules.map(([cond, then, level]) => h('div', { class: 'rule' },
       h('div', { class: 'if' }, h('span', { class: 'kw' }, 'IF'), cond),
       h('div', { class: 'then' }, h('span', { class: 'kw' }, 'THEN'), then, h('span', { class: `badge badge-${level}` }, label[level]))))),
+    h('p', { class: 'caption', style: { margin: '8px 4px 0' } }, `환경값은 최근 ${g.env_lookback}번 중 ${g.persist_count}번 이상 기준을 벗어나야 '지속'으로 봐요. 생장 감소 = 둔화 또는 정체.`),
+
     h('h2', { class: 'section-title' }, '상태 구분'),
     h('div', { class: 'list' },
-      [['good', '정상 생육', '높이와 투영 면적이 꾸준히 늘고, 생장률이 유지되고, 환경 변화가 크지 않아요.'],
+      [['good', '정상 생육', '높이와 투영 면적(또는 3D 부피)이 꾸준히 늘고, 환경 변화가 크지 않아요.'],
         ['observe', '관찰 필요', '생장 증가량이 줄었거나 환경값이 변했지만 아직 원인을 단정하기 어려워요.'],
         ['care', '관리 필요', '생육 정체·감소와 좋지 않은 환경 조건이 함께 나타나요.']].map(([k, t, d]) =>
         h('div', { class: 'list-item' }, h('div', { class: 'grow' }, h('span', { class: `badge badge-${k}` }, t), h('div', { class: 'meta', style: { marginTop: '6px' } }, d))))),
-    h('p', { class: 'caption', style: { margin: '20px 4px 0' } }, '추천은 식물 상태를 의학적·생물학적으로 진단하는 것이 아니라, 측정한 데이터로 관리 행동을 결정할 때 참고할 수 있는 보조 정보예요. 기준값은 설정에서 실험 데이터에 맞게 조정할 수 있어요.'));
+
+    h('h2', { class: 'section-title' }, '기준값 자동 제안'),
+    h('section', { class: 'card' }, bullets([
+      '정체 기준: 환경이 기준 안이었던 정상 구간 생장률의 하위 10% (건강한 구간의 90%는 이보다 빨랐어요)',
+      '급감 경고: 평상시 측정 오차로 줄어든 폭(5백분위)의 1.5배',
+      '토양 수분 최솟값: 물을 주기 직전 토양 수분의 중앙값',
+      '온도·습도·조도: 잘 자란 구간이 기준 밖이면 넓히고, 기준 안에서 느린 구간이 나오면 좁혀요. 근거가 없으면 그대로 둬요.',
+      '이상치는 IQR 규칙으로 빼고, 생장 구간이 8개 미만이면 제안하지 않아요.',
+    ]), h('a', { class: 'btn btn-text', href: '#/settings/species/basil', style: { marginTop: '4px' } }, '바질 기준에서 제안받기')),
+
+    h('h2', { class: 'section-title' }, '추천 효과 검증'),
+    h('section', { class: 'card' }, bullets([
+      '사진을 찍은 시점마다 그때까지의 기록만으로 추천을 다시 계산해요.',
+      '추천 뒤 2일 안에 맞는 관리를 기록했으면 따름, 아니면 안 따름이에요.',
+      '따름/안 따름 무리의 다음 구간 생장률 변화, 회복 비율, 토양 수분 변화를 비교해요.',
+    ]), h('a', { class: 'btn btn-text', href: '#/report/validation', style: { marginTop: '4px' } }, '검증 리포트 보기')),
+
+    h('p', { class: 'caption', style: { margin: '20px 4px 0' } }, '추천은 식물 상태를 의학적·생물학적으로 진단하는 것이 아니라, 측정한 데이터로 관리 행동을 결정할 때 참고할 수 있는 보조 정보예요. 모든 수식과 근거는 저장소의 jaram/ALGORITHM.md 문서에 정리돼 있어요.'));
 }

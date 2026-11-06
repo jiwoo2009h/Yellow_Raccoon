@@ -474,7 +474,8 @@ textarea.input { height: auto; min-height: 88px; padding: 14px 16px; resize: ver
 input[type="datetime-local"].input { padding-right: 12px; min-height: 52px; }
 .form-error { color: var(--care-text); font-size: 14px; margin-top: 8px; }
 
-.range-row { display: grid; grid-template-columns: 1fr 24px 1fr; align-items: center; gap: 6px; }
+.range-row { display: grid; grid-template-columns: minmax(0, 1fr) 16px minmax(0, 1fr); align-items: center; gap: 6px; }
+.range-row input[type="date"] { min-width: 0; width: 100%; padding-left: 12px; padding-right: 8px; font-size: 15px; }
 .range-row .sep { text-align: center; color: var(--text-4); }
 
 /* ---------------------------------------------------------------- 탭바 */
@@ -728,3 +729,22 @@ table.data tr:last-child td { border-bottom: 0; }
 .camera-top .btn-text[hidden] { display: none; }
 
 .footer-note { text-align: center; font-size: 13px; color: var(--text-4); margin-top: 32px; }
+
+/* ---------------- 기준값 제안 ---------------- */
+.suggest-entry { margin-top: 8px; border-radius: var(--radius); background: var(--surface); }
+.suggest-list { display: flex; flex-direction: column; gap: 8px; }
+.suggest-item { display: flex; gap: 12px; align-items: flex-start; padding: 14px; border-radius: var(--radius-md); background: var(--surface-2); cursor: pointer; }
+.suggest-item.none { cursor: default; }
+.suggest-item input[type="checkbox"] { width: 22px; height: 22px; margin: 1px 0 0; flex: none; accent-color: var(--accent); }
+.suggest-dot { width: 22px; height: 22px; flex: none; display: grid; place-items: center; }
+.suggest-dot::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--text-4); }
+.suggest-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.suggest-head .title { font-weight: 600; font-size: 15px; }
+.suggest-head .vals { font-size: 15px; color: var(--text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.suggest-head .vals .arrow { color: var(--text-4); margin: 0 6px; }
+.suggest-head .vals b { color: var(--accent-text); font-weight: 700; }
+.suggest-item.none .suggest-head .vals { color: var(--text-3); }
+.suggest-item .method { font-size: 13px; color: var(--text-2); margin-top: 4px; line-height: 1.45; }
+.suggest-item.none .method { color: var(--text-3); }
+.suggest-item .basis { font-size: 12px; color: var(--text-4); margin-top: 2px; line-height: 1.45; }
+.input-wrap.just-filled { box-shadow: 0 0 0 2px var(--accent); border-radius: var(--radius-sm); transition: box-shadow 0.3s var(--ease); }

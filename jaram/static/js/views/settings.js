@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { h, icons, topbar, segmented, field, numberInput, toast, confirmSheet, fmt, formValues, skeleton } from '../ui.js';
+import { h, icons, topbar, segmented, field, numberInput, toast, confirmSheet, fmt, formValues, skeleton, sheet, dateShort } from '../ui.js';
 import { getTheme, setTheme } from '../theme.js';
 
 const row = ({ href, icon, title, meta, onClick, accent }) => h(href ? 'a' : 'button', {
@@ -123,6 +123,11 @@ export async function speciesSettingsView({ key }) {
   h('div', { class: 'page-head', style: { paddingTop: '8px' } }, h('div', null,
     h('h1', { class: 'large-title' }, `${t.label} 기준`),
     h('p', { class: 'subtitle' }, '관리 추천 알고리즘이 쓰는 임계값이에요.'))),
+  h('button', { class: 'list-item suggest-entry', type: 'button', onclick: () => suggestSheet(key, t.label, form) },
+    h('div', { class: 'list-icon accent', html: icons.chart }),
+    h('div', { class: 'grow' }, h('div', { class: 'title' }, '실험 데이터로 기준 제안받기'),
+      h('div', { class: 'meta' }, '모은 기록의 통계로 제안값과 근거를 보여 줘요')),
+    h('span', { class: 'chev', html: icons.chevron, style: { display: 'contents' } })),
   SECTIONS.map(([title, desc, items]) => [
     h('h2', { class: 'section-title' }, title),
     h('section', { class: 'card' },
@@ -179,6 +184,84 @@ export async function speciesSettingsView({ key }) {
 
   screen.replaceChildren(topbar({ title: '' }), form);
   drawHsv();
+}
+
+// ------------------------------------------------------------ 기준값 제안
+const SUGGEST_DIGITS = { lux_min: 0, temp_min: 1, temp_max: 1, stagnation_rate: 1, volume_stagnation_rate: 1 };
+
+function suggestSheet(species, label, form) {
+  const from = h('input', { class: 'input', type: 'date', name: 'from', 'aria-label': '시작 날짜' });
+  const to = h('input', { class: 'input', type: 'date', name: 'to', 'aria-label': '끝 날짜' });
+  const body = h('div', { class: 'suggest-body' }, h('div', { class: 'spinner small', style: { margin: '24px auto' } }));
+  let data = null;
+  const checks = new Map();
+
+  const value = (it, v) => `${fmt(v, SUGGEST_DIGITS[it.key] ?? 0)}${it.unit === 'lux' ? ' lux' : it.unit}`;
+
+  function itemRow(it) {
+    const can = it.suggested !== null && it.changed;
+    const box = can ? h('input', { type: 'checkbox', checked: true, 'aria-label': `${it.label} 제안값 적용` }) : null;
+    if (box) checks.set(it.key, box);
+    return h('label', { class: `suggest-item${can ? '' : ' none'}` },
+      box || h('span', { class: 'suggest-dot', 'aria-hidden': 'true' }),
+      h('div', { class: 'grow' },
+        h('div', { class: 'suggest-head' },
+          h('span', { class: 'title' }, it.label),
+          h('span', { class: 'vals' },
+            value(it, it.current),
+            it.suggested !== null ? [h('span', { class: 'arrow' }, '→'), h('b', null, value(it, it.suggested))] : null)),
+        it.suggested !== null
+          ? [h('div', { class: 'method' }, it.changed ? it.method : '제안값이 지금 기준과 같아요'), h('div', { class: 'basis' }, it.basis)]
+          : [h('div', { class: 'method' }, it.missing), it.basis ? h('div', { class: 'basis' }, it.basis) : null]));
+  }
+
+  async function load() {
+    checks.clear();
+    body.replaceChildren(h('div', { class: 'spinner small', style: { margin: '24px auto' } }));
+    try {
+      data = await api.suggest(species, from.value, to.value);
+    } catch (err) {
+      body.replaceChildren(h('div', { class: 'notice warn' }, h('span', { html: icons.warn, style: { display: 'contents' } }), h('div', { class: 'grow' }, err.message)));
+      return;
+    }
+    const s = data.summary;
+    body.replaceChildren(
+      h('p', { class: 'caption', style: { margin: '0 2px 10px' } },
+        s.plants.length ? `${s.plants.join('·')} · 생장 구간 ${s.intervals}개 · 3D 구간 ${s.scan_intervals}개${s.first ? ` · ${dateShort(s.first)}–${dateShort(s.last)}` : ''}`
+          : `${label} 식물이 아직 없어요.`),
+      h('div', { class: 'suggest-list' }, data.items.map(itemRow)));
+    apply.disabled = checks.size === 0;
+  }
+
+  const apply = h('button', { class: 'btn btn-primary', disabled: true }, '고른 값 입력칸에 넣기');
+  sheet((close) => {
+    apply.onclick = async () => {
+      let n = 0;
+      for (const it of data.items) {
+        const box = checks.get(it.key);
+        if (!box || !box.checked) continue;
+        const input = form.querySelector(`input[name="${it.key}"]`);
+        if (!input) continue;
+        input.value = String(it.suggested);
+        input.closest('.input-wrap')?.classList.add('just-filled');
+        n += 1;
+      }
+      await close();
+      toast(n ? `${n}개 항목을 채웠어요. 확인하고 저장해 주세요` : '고른 항목이 없어요');
+    };
+    return [
+      h('h2', { class: 'sheet-title' }, `${label} 기준 제안`),
+      h('p', { class: 'sheet-desc' }, '모은 기록으로 통계를 내서 기준을 제안해요. 고른 값은 입력칸에만 채워지고, 저장하기를 눌러야 반영돼요.'),
+      h('div', { class: 'field-label' }, '기초 데이터 기간 (비우면 전체)'),
+      h('div', { class: 'range-row' }, from, h('span', { class: 'sep' }, '~'), to),
+      h('button', { class: 'btn btn-soft btn-sm', type: 'button', style: { marginTop: '10px' }, onclick: load }, '이 기간으로 다시 계산'),
+      h('div', { style: { height: '16px' } }),
+      body,
+      h('p', { class: 'caption', style: { margin: '12px 2px 0' } }, '식물이 클수록 % 생장률은 자연히 낮아져요. 지금 생장 단계와 비슷한 기간을 고르면 더 알맞은 값이 나와요.'),
+      h('div', { class: 'actions' }, apply),
+    ];
+  });
+  load();
 }
 
 // ------------------------------------------------------------ 공통 기준

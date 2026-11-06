@@ -34,6 +34,7 @@ from flask import Flask, Response, g, jsonify, request, send_file, send_from_dir
 
 import db
 import scans_api
+import suggest as suggest_mod
 from growth import parse_time, scan_series, with_units
 from recommend import evaluate
 from thresholds import SPECIES_KEYS, default_thresholds, merge_thresholds
@@ -750,6 +751,31 @@ def create_app(data_dir=None, password=None):
         db.set_setting(conn(), "thresholds", merged)
         conn().commit()
         return get_settings()
+
+    @app.get("/api/settings/suggest")
+    def suggest_settings():
+        """실험 데이터로 기준값 제안 (적용은 화면에서 사람이 골라서)"""
+        th = thresholds()
+        species = request.args.get("species", "basil")
+        if species not in th["species"]:
+            raise ApiError("식물 종류를 확인해 주세요.")
+        try:
+            start, end = suggest_mod.parse_period(request.args.get("from") or None, request.args.get("to") or None)
+        except ValueError:
+            raise ApiError("기간은 YYYY-MM-DD 형식으로 입력해 주세요.")
+        if start and end and start >= end:
+            raise ApiError("시작 날짜가 끝 날짜보다 늦어요.")
+        data = []
+        for p in db.rows(conn().execute("SELECT * FROM plants WHERE species = ? ORDER BY id", (species,))):
+            series = with_units(load_measurements(p["id"]), p["cm_per_px"])
+            env = db.rows(conn().execute("SELECT * FROM env_logs WHERE plant_id = ? ORDER BY at, id", (p["id"],)))
+            care = db.rows(conn().execute("SELECT * FROM care_logs WHERE plant_id = ? ORDER BY at, id", (p["id"],)))
+            data.append({"name": p["name"], "series": series, "env": env, "care": care, "scans": load_scans(p)})
+        res = suggest_mod.suggest(data, th["species"][species], start, end)
+        res["species"] = species
+        res["label"] = th["species"][species]["label"]
+        res["period"] = {"from": request.args.get("from") or None, "to": request.args.get("to") or None}
+        return jsonify(res)
 
     @app.post("/api/settings/reset")
     def reset_settings():

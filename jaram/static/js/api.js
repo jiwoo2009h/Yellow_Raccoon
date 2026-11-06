@@ -55,6 +55,12 @@ export const api = {
   settings: () => request('GET', '/api/settings'),
   saveSettings: (thresholds) => request('PUT', '/api/settings', { thresholds }),
   resetSettings: () => request('POST', '/api/settings/reset'),
+  suggest: (species, from, to) => {
+    const q = new URLSearchParams({ species });
+    if (from) q.set('from', from);
+    if (to) q.set('to', to);
+    return request('GET', `/api/settings/suggest?${q}`);
+  },
   report: () => request('GET', '/api/report'),
   // 3D 측정
   createScan: (plantId, body = {}) => request('POST', `/api/plants/${plantId}/scans`, body),

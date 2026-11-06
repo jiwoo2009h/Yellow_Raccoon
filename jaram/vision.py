@@ -95,11 +95,13 @@ class PlantAnalyzer:
 
     # ---- 5단계: 식물 영역 고르기 ----
     @staticmethod
-    def select_plant(mask: np.ndarray):
+    def select_plant(mask: np.ndarray, prefer: str = "largest"):
         """가장 큰 초록 덩어리를 중심으로, 그 근처에 있는 잎 조각들을 함께 식물로 봅니다.
 
         바질처럼 잎이 떨어져 보이는 경우에도 한 식물로 묶고,
         사진 가장자리에 걸친 옆 화분의 잎은 되도록 빼기 위한 규칙입니다.
+        prefer="center" 이면 큰 덩어리들 중 화면 가운데에 가장 가까운 것을 중심으로 삼습니다
+        (3D 측면 사진처럼 뒤쪽에 다른 화분이 함께 찍히기 쉬운 경우).
         """
         img_h, img_w = mask.shape[:2]
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -109,6 +111,15 @@ class PlantAnalyzer:
             return [], None
         pieces.sort(key=cv2.contourArea, reverse=True)
         main = pieces[0]
+        if prefer == "center":
+            big = [c for c in pieces if cv2.contourArea(c) >= 0.3 * cv2.contourArea(pieces[0])]
+
+            def center_dist(c):
+                x, y, w, h = cv2.boundingRect(c)
+                return abs(x + w / 2 - img_w / 2)
+
+            main = min(big, key=center_dist)
+            pieces = [main] + [c for c in pieces if c is not main]
         if cv2.contourArea(main) < img_w * img_h * 0.003:
             return [], None
 
@@ -137,15 +148,22 @@ class PlantAnalyzer:
             rest = keep
         return selected, tuple(int(v) for v in box)
 
-    def analyze(self, image: np.ndarray) -> AnalysisResult:
+    def analyze(self, image: np.ndarray, roi=None, prefer: str = "largest") -> AnalysisResult:
+        """roi: 분석 영역 [x0, y0, x1, y1] (사진 크기에 대한 0~1 비율). 영역 밖 초록색은 무시합니다."""
         image = normalize_size(image)
         img_h, img_w = image.shape[:2]
         raw_mask = self.segment(image)
-        selected, bbox = self.select_plant(raw_mask)
+        roi_px = roi_to_pixels(roi, img_w, img_h)
+        if roi_px:
+            x0, y0, x1, y1 = roi_px
+            limited = np.zeros_like(raw_mask)
+            limited[y0:y1, x0:x1] = raw_mask[y0:y1, x0:x1]
+            raw_mask = limited
+        selected, bbox = self.select_plant(raw_mask, prefer=prefer)
         if not selected:
             raise PlantNotFoundError(
-                "사진에서 식물을 찾지 못했어요. 식물이 잘 보이도록 밝은 곳에서 다시 찍거나, "
-                "설정에서 색상(HSV) 범위를 조정해 주세요."
+                ("분석 영역 안에서 식물을 찾지 못했어요. 영역을 넓히거나 " if roi_px else "사진에서 식물을 찾지 못했어요. ")
+                + "식물이 잘 보이도록 밝은 곳에서 다시 찍거나, 설정에서 색상(HSV) 범위를 조정해 주세요."
             )
 
         # 선택한 윤곽선 내부 중 실제로 초록색인 픽셀만 식물로 셉니다 (잎 사이 구멍 제외).
@@ -159,8 +177,8 @@ class PlantAnalyzer:
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         mean_h, mean_s, mean_v, _ = cv2.mean(hsv, mask=plant_mask)
 
-        warnings = self.quality_warnings(image, hsv, bbox, area_px)
-        overlay = self.draw_overlay(image, plant_mask, selected, bbox)
+        warnings = self.quality_warnings(image, hsv, bbox, area_px, roi_px)
+        overlay = self.draw_overlay(image, plant_mask, selected, bbox, roi_px)
         return AnalysisResult(
             height_px=int(h),
             width_px=int(w),
@@ -178,14 +196,16 @@ class PlantAnalyzer:
         )
 
     @staticmethod
-    def quality_warnings(image, hsv, bbox, area_px):
+    def quality_warnings(image, hsv, bbox, area_px, roi_px=None):
         """계획서 '모. 영상 분석에서 발생할 수 있는 오차'를 줄이기 위한 촬영 상태 점검."""
         img_h, img_w = image.shape[:2]
         x, y, w, h = bbox
         warnings = []
         edge = 3
-        if x <= edge or y <= edge or x + w >= img_w - edge or y + h >= img_h - edge:
-            warnings.append("식물이 사진 가장자리에 닿아 있어요. 식물 전체가 나오게 찍으면 더 정확해요.")
+        bx0, by0, bx1, by1 = roi_px or (0, 0, img_w, img_h)
+        if x <= bx0 + edge or y <= by0 + edge or x + w >= bx1 - edge or y + h >= by1 - edge:
+            warnings.append("식물이 분석 영역 가장자리에 닿아 있어요. 영역을 넓혀 주세요." if roi_px
+                            else "식물이 사진 가장자리에 닿아 있어요. 식물 전체가 나오게 찍으면 더 정확해요.")
         if float(np.mean(hsv[:, :, 2])) < 70:
             warnings.append("사진이 어두워요. 조명을 켜거나 밝은 곳에서 찍어 주세요.")
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -196,7 +216,7 @@ class PlantAnalyzer:
         return warnings
 
     @staticmethod
-    def draw_overlay(image, plant_mask, contours, bbox):
+    def draw_overlay(image, plant_mask, contours, bbox, roi_px=None):
         """분석 결과 이미지: 배경은 어둡게, 식물 영역은 초록으로 강조, 높이·폭 상자 표시."""
         dim = (image * 0.45).astype(np.uint8)
         tint = np.full_like(image, (90, 200, 60))  # BGR 초록
@@ -205,7 +225,28 @@ class PlantAnalyzer:
         cv2.drawContours(out, contours, -1, (255, 255, 255), 2, lineType=cv2.LINE_AA)
         x, y, w, h = bbox
         cv2.rectangle(out, (x, y), (x + w, y + h), (255, 255, 255), 1, lineType=cv2.LINE_AA)
+        if roi_px:
+            # 분석 영역: 노란 점선 테두리
+            x0, y0, x1, y1 = roi_px
+            for (ax, ay, bx, by) in ((x0, y0, x1, y0), (x1, y0, x1, y1), (x1, y1, x0, y1), (x0, y1, x0, y0)):
+                length = max(abs(bx - ax), abs(by - ay))
+                for t in range(0, int(length), 18):
+                    s0, s1 = t / max(1, length), min(1, (t + 10) / max(1, length))
+                    p0 = (int(ax + (bx - ax) * s0), int(ay + (by - ay) * s0))
+                    p1 = (int(ax + (bx - ax) * s1), int(ay + (by - ay) * s1))
+                    cv2.line(out, p0, p1, (60, 210, 250), 2, lineType=cv2.LINE_AA)
         return out
+
+
+def roi_to_pixels(roi, img_w, img_h):
+    """[x0, y0, x1, y1] (0~1 비율) → 정수 픽셀 좌표. 없거나 너무 작으면 None."""
+    if not roi:
+        return None
+    x0, y0, x1, y1 = [min(1.0, max(0.0, float(v))) for v in roi]
+    px = (int(x0 * img_w), int(y0 * img_h), int(round(x1 * img_w)), int(round(y1 * img_h)))
+    if px[2] - px[0] < 20 or px[3] - px[1] < 20:
+        return None
+    return px
 
 
 def encode_jpeg(image: np.ndarray, quality: int = 88) -> bytes:

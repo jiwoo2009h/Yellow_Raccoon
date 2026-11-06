@@ -630,6 +630,11 @@ input[type="datetime-local"].input { padding-right: 12px; min-height: 52px; }
   position: absolute; width: 112px; height: 112px; border-radius: 50%; border: 3px solid #fff; box-shadow: var(--shadow-pop);
   background-repeat: no-repeat; pointer-events: none; transform: translate(-50%, -150%);
 }
+.roi-box { position: absolute; border: 2px solid #fff; border-radius: 6px; box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.45); cursor: move; }
+.roi-handle { position: absolute; width: 32px; height: 32px; margin: -16px; display: grid; place-items: center; cursor: nwse-resize; }
+.roi-handle::after { content: ""; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4); }
+.roi-handle.nw { left: 0; top: 0; } .roi-handle.ne { right: 0; top: 0; margin-right: -16px; cursor: nesw-resize; }
+.roi-handle.sw { left: 0; bottom: 0; margin-bottom: -16px; cursor: nesw-resize; } .roi-handle.se { right: 0; bottom: 0; margin: 0 -16px -16px 0; }
 .loupe::after { content: ""; position: absolute; left: 50%; top: 50%; width: 10px; height: 10px; margin: -5px; border-radius: 50%; border: 2px solid #ff3b30; }
 
 /* ---------------------------------------------------------------- 차트 */

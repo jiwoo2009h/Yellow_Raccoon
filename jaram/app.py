@@ -267,6 +267,13 @@ def create_app(data_dir=None, password=None):
             raise ApiError("식물을 찾을 수 없어요.", 404)
         return p
 
+    def plant_roi(plant):
+        """식물별 분석 영역 [x0, y0, x1, y1] (0~1 비율) 또는 None"""
+        try:
+            return json.loads(plant["roi"]) if plant.get("roi") else None
+        except ValueError:
+            return None
+
     def load_measurements(pid):
         ms = db.rows(conn().execute(
             "SELECT * FROM measurements WHERE plant_id = ? ORDER BY taken_at, id", (pid,)))
@@ -331,6 +338,7 @@ def create_app(data_dir=None, password=None):
             "created_at": plant["created_at"],
             "cm_per_px": plant["cm_per_px"],
             "calibration": json.loads(plant["calibration"]) if plant["calibration"] else None,
+            "roi": plant_roi(plant),
             "unit": "cm" if plant["cm_per_px"] else "px",
             "count": len(series),
             "first_taken_at": series[0]["taken_at"] if series else None,
@@ -483,6 +491,19 @@ def create_app(data_dir=None, password=None):
                     "length_cm": length, "pixels": round(dist, 2),
                     "measurement_id": cal.get("measurement_id"),
                 })
+        if "roi" in body:
+            roi = body["roi"]
+            if roi is None:
+                fields["roi"] = None
+            else:
+                if isinstance(roi, dict):
+                    roi = [roi.get(k) for k in ("x0", "y0", "x1", "y1")]
+                if not isinstance(roi, (list, tuple)) or len(roi) != 4:
+                    raise ApiError("분석 영역 형식이 올바르지 않아요.")
+                x0, y0, x1, y1 = [num(v, 0, 1, "분석 영역 좌표") for v in roi]
+                if None in (x0, y0, x1, y1) or x1 - x0 < 0.05 or y1 - y0 < 0.05:
+                    raise ApiError("분석 영역이 너무 작아요. 식물이 다 들어가게 넓혀 주세요.")
+                fields["roi"] = json.dumps([round(v, 4) for v in (x0, y0, x1, y1)])
         if fields:
             sets = ", ".join(f"{k} = ?" for k in fields)
             conn().execute(f"UPDATE plants SET {sets} WHERE id = ?", (*fields.values(), plant["id"]))
@@ -513,7 +534,7 @@ def create_app(data_dir=None, password=None):
             raise ApiError(str(exc)) from exc
         cfg = species_cfg(thresholds(), plant["species"])
         try:
-            res = PlantAnalyzer(cfg["hsv_lower"], cfg["hsv_upper"]).analyze(image)
+            res = PlantAnalyzer(cfg["hsv_lower"], cfg["hsv_upper"]).analyze(image, roi=plant_roi(plant))
         except PlantNotFoundError as exc:
             raise ApiError(str(exc), 422) from exc
         taken_at = parse_dt(request.form.get("taken_at")) or now_iso()
@@ -588,7 +609,7 @@ def create_app(data_dir=None, password=None):
                 failed += 1
                 continue
             try:
-                res = analyzer.analyze(load_image(path.read_bytes()))
+                res = analyzer.analyze(load_image(path.read_bytes()), roi=plant_roi(plant))
             except (PlantNotFoundError, ValueError):
                 failed += 1
                 continue

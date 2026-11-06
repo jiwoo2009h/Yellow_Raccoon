@@ -336,6 +336,7 @@ export async function plantView({ id }) {
   function moreMenu(p) {
     actionSheet(p.name, [
       { icon: 'note', label: '이름·종류 수정', onClick: () => { location.hash = `#/plant/${p.id}/edit`; } },
+      { icon: 'crop', label: '분석 영역 지정', desc: p.roi ? '지정됨 · 영역 밖 초록색은 분석에서 빠져요' : '옆 화분 잎이 함께 찍힐 때 사용', onClick: () => { location.hash = `#/plant/${p.id}/roi`; } },
       { icon: 'ruler', label: '크기 보정 (자)', desc: p.cm_per_px ? `보정됨 · 1cm = ${fmt(1 / p.cm_per_px, 1)}px` : '사진 속 자로 cm 단위 환산', onClick: () => { location.hash = `#/plant/${p.id}/calibrate`; } },
       { icon: 'temp', label: '환경 기록', onClick: async () => { const u = await envSheet(p, lastEnv(p)); if (u) rerender(u); } },
       { icon: 'refresh', label: '모든 사진 다시 분석', desc: '설정에서 색상(HSV) 범위를 바꿨을 때', onClick: async () => {

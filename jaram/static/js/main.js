@@ -11,6 +11,8 @@ import { resultView } from './views/result.js';
 import { plantFormView } from './views/plantForm.js';
 import { calibrateView } from './views/calibrate.js';
 import { roiView } from './views/roi.js';
+import { scanView } from './views/scan.js';
+import { scanResultView } from './views/scanResult.js';
 import { reportView } from './views/report.js';
 import { settingsView, speciesSettingsView, generalSettingsView, algorithmView } from './views/settings.js';
 
@@ -27,6 +29,8 @@ const routes = [
   ['/plant/:id/capture', captureView],
   ['/plant/:id/calibrate', calibrateView],
   ['/plant/:id/roi', roiView],
+  ['/plant/:id/scan', scanView],
+  ['/scan/:id', scanResultView],
   ['/m/:id', resultView],
 ];
 

@@ -10,6 +10,7 @@
 from datetime import datetime
 
 MIN_DAYS = 1 / 24  # 1시간보다 짧은 간격은 생장률을 계산하지 않습니다.
+SCAN_MIN_DAYS = 0.5  # 3D 측정은 손촬영 오차가 커서 반나절보다 짧은 간격은 부피 생장률을 내지 않습니다.
 
 
 def parse_time(value):
@@ -121,3 +122,34 @@ def summarize(series, window=2):
             "area_pct_per_day": area_pct / days if area_pct is not None and days >= MIN_DAYS else None,
         }
     return summary
+
+
+def scan_series(scans, cm_per_px=None):
+    """3D 측정(부피 등)을 cm 단위로 바꾸고 직전 측정과의 변화·부피 생장률(%/일)을 붙입니다.
+
+    부피는 길이의 세제곱이라 보정값도 세제곱(cm³), 위에서 본 면적은 제곱(cm²)으로 환산합니다.
+    """
+    k = cm_per_px if cm_per_px and cm_per_px > 0 else None
+    out = []
+    prev = None
+    for s in scans:
+        e = dict(s)
+        e["volume"] = s["volume_px"] * k ** 3 if k else float(s["volume_px"])
+        for key in ("height", "width", "depth"):
+            v = s.get(f"{key}_px")
+            e[key] = (v * k if k else float(v)) if v is not None else None
+        ta = s.get("top_area_px")
+        e["top_area"] = (ta * k * k if k else float(ta)) if ta is not None else None
+        e["delta"] = None
+        if prev is not None:
+            days = days_between(prev["taken_at"], e["taken_at"])
+            pct = pct_change(prev["volume"], e["volume"])
+            e["delta"] = {
+                "days": days,
+                "volume": e["volume"] - prev["volume"],
+                "volume_pct": pct,
+                "volume_pct_per_day": pct / days if pct is not None and days >= SCAN_MIN_DAYS else None,
+            }
+        out.append(e)
+        prev = e
+    return out

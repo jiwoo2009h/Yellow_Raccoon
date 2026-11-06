@@ -28,10 +28,13 @@ import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from types import SimpleNamespace
+
 from flask import Flask, Response, g, jsonify, request, send_file, send_from_directory, session
 
 import db
-from growth import parse_time, with_units
+import scans_api
+from growth import parse_time, scan_series, with_units
 from recommend import evaluate
 from thresholds import SPECIES_KEYS, default_thresholds, merge_thresholds
 from vision import PlantAnalyzer, PlantNotFoundError, encode_jpeg, encode_png, load_image
@@ -352,6 +355,7 @@ def create_app(data_dir=None, password=None):
             "last_care": care[-1] if care else None,
         }
         if detail:
+            data["scans"] = [scans_api.scan_summary(sc, media_url) for sc in load_scans(plant)]
             data["measurements"] = [m_json(e, env_by_m) for e in series]
             data["env_logs"] = env
             data["care_logs"] = [{**c, "kind_label": CARE_KINDS.get(c["kind"], c["kind"])} for c in care]
@@ -379,6 +383,25 @@ def create_app(data_dir=None, password=None):
             path = (app.config["UPLOAD_DIR"] / name).resolve()
             if app.config["UPLOAD_DIR"].resolve() in path.parents and path.exists():
                 path.unlink()
+
+    def insert_measurement(plant_id, names, m, taken_at):
+        """분석 결과(metrics)와 저장한 파일 이름으로 측정 기록 한 줄을 만듭니다."""
+        cur = conn().execute(
+            """INSERT INTO measurements(plant_id, taken_at, photo, mask, overlay, img_w, img_h,
+                   height_px, width_px, area_px, bbox, hue, sat, val, warnings, created_at)
+               VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (plant_id, taken_at, names["photo"], names["mask"], names["overlay"], m["img_w"], m["img_h"],
+             m["height_px"], m["width_px"], m["area_px"], json.dumps(m["bbox"]), m["hue"], m["sat"],
+             m["val"], json.dumps(m["warnings"], ensure_ascii=False), now_iso()))
+        return cur.lastrowid
+
+    def load_scans(plant):
+        """완료된 3D 측정 목록 (cm 단위·직전 대비 변화 포함)"""
+        rows_ = db.rows(conn().execute(
+            "SELECT s.*, (SELECT v.photo FROM scan_views v WHERE v.scan_id = s.id AND v.kind = 'side' "
+            "AND v.angle = 0 LIMIT 1) AS thumb FROM scans s "
+            "WHERE s.plant_id = ? AND s.status = 'done' ORDER BY s.taken_at, s.id", (plant["id"],)))
+        return scan_series(rows_, plant["cm_per_px"])
 
     def measurement_context(mid):
         m = db.row(conn().execute("SELECT * FROM measurements WHERE id = ?", (mid,)).fetchone())
@@ -513,12 +536,16 @@ def create_app(data_dir=None, password=None):
     @app.delete("/api/plants/<int:pid>")
     def delete_plant(pid):
         plant = get_plant(pid)
-        files = conn().execute(
-            "SELECT photo, mask, overlay FROM measurements WHERE plant_id = ?", (pid,)).fetchall()
+        files = [tuple(f) for f in conn().execute(
+            "SELECT photo, mask, overlay FROM measurements WHERE plant_id = ?", (pid,)).fetchall()]
+        files += [tuple(f) for f in conn().execute(
+            "SELECT v.photo, v.mask, v.overlay FROM scan_views v JOIN scans s ON s.id = v.scan_id "
+            "WHERE s.plant_id = ?", (pid,)).fetchall()]
+        files += [(f["points"],) for f in conn().execute("SELECT points FROM scans WHERE plant_id = ?", (pid,)).fetchall()]
         conn().execute("DELETE FROM plants WHERE id = ?", (plant["id"],))
         conn().commit()
         for f in files:
-            remove_files(f["photo"], f["mask"], f["overlay"])
+            remove_files(*f)
         return jsonify(ok=True)
 
     # ---------------- 촬영 / 분석 ----------------
@@ -539,16 +566,9 @@ def create_app(data_dir=None, password=None):
             raise ApiError(str(exc), 422) from exc
         taken_at = parse_dt(request.form.get("taken_at")) or now_iso()
         names = save_files(plant, res, taken_at)
-        m = res.metrics()
-        cur = conn().execute(
-            """INSERT INTO measurements(plant_id, taken_at, photo, mask, overlay, img_w, img_h,
-                   height_px, width_px, area_px, bbox, hue, sat, val, warnings, created_at)
-               VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (pid, taken_at, names["photo"], names["mask"], names["overlay"], m["img_w"], m["img_h"],
-             m["height_px"], m["width_px"], m["area_px"], json.dumps(m["bbox"]), m["hue"], m["sat"],
-             m["val"], json.dumps(m["warnings"], ensure_ascii=False), now_iso()))
+        mid = insert_measurement(pid, names, res.metrics(), taken_at)
         conn().commit()
-        return jsonify(measurement_context(cur.lastrowid)), 201
+        return jsonify(measurement_context(mid)), 201
 
     @app.get("/api/measurements/<int:mid>")
     def get_measurement(mid):
@@ -760,7 +780,13 @@ def create_app(data_dir=None, password=None):
                         "height_image": e["height"], "height_manual": e["manual_height_cm"],
                         "width_image": e["width"], "width_manual": e["manual_width_cm"],
                     })
+            scans = load_scans(p)
             out.append({
+                "scans": [{
+                    "id": sc["id"], "taken_at": sc["taken_at"], "volume": sc["volume"],
+                    "day": (parse_time(sc["taken_at"]) - parse_time(scans[0]["taken_at"])).total_seconds() / 86400,
+                    "volume_pct": (sc["volume"] / scans[0]["volume"] - 1) * 100 if scans[0]["volume"] else None,
+                } for sc in scans],
                 "id": p["id"], "name": p["name"], "code": p["code"], "species": p["species"],
                 "species_label": species_cfg(th, p["species"])["label"],
                 "unit": "cm" if p["cm_per_px"] else "px",
@@ -859,6 +885,14 @@ def create_app(data_dir=None, password=None):
                 pass
 
         return response
+
+    # ---------------- 3D 측정 (scans_api.py) ----------------
+    scans_api.register(app, SimpleNamespace(
+        conn=conn, ApiError=ApiError, get_plant=get_plant, thresholds=thresholds, species_cfg=species_cfg,
+        plant_roi=plant_roi, media_url=media_url, now_iso=now_iso, parse_dt=parse_dt, num=num, text=text,
+        clean=clean, safe_code=safe_code, remove_files=remove_files, insert_measurement=insert_measurement,
+        load_scans=load_scans, upload_dir=app.config["UPLOAD_DIR"], CARE_KINDS=CARE_KINDS,
+    ))
 
     return app
 

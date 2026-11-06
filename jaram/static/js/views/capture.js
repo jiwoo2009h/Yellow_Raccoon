@@ -1,6 +1,7 @@
 import { api } from '../api.js';
 import { h, icons, topbar, sheet, toast, relDays, isToday, goBack, skeleton } from '../ui.js';
-import { prepareImage, readExifDate, canvasToBlob } from '../image.js';
+import { prepareImage, readExifDate } from '../image.js';
+import { openCamera, canUseLiveCamera } from '../camera.js';
 
 const STEPS = ['사진 크기를 맞추는 중', '초록색 식물 영역을 찾는 중', '높이·폭·면적을 계산하는 중', '지난 기록과 비교하는 중'];
 
@@ -45,11 +46,11 @@ export async function captureView({ id }) {
   screen.append(topbar({ title: '사진 찍기' }), skeleton(400, 8));
   const plant = await api.plant(id);
   const latest = plant.measurements[plant.measurements.length - 1];
-  const canLive = window.isSecureContext && navigator.mediaDevices?.getUserMedia;
-  let stream = null;
+  const canLive = canUseLiveCamera();
+  let cam = null;
   let busy = false;
 
-  const stop = () => { stream?.getTracks().forEach((t) => t.stop()); stream = null; };
+  const stop = () => { cam?.close(); cam = null; };
 
   // 숨겨진 파일 입력: 카메라 앱 / 앨범
   const camInput = h('input', { type: 'file', accept: 'image/*', capture: 'environment', hidden: true });
@@ -108,56 +109,15 @@ export async function captureView({ id }) {
 
   // ------------------------------------------------------------ 실시간 카메라 (HTTPS 일 때)
   async function liveMode() {
-    const video = h('video', { autoplay: true, playsinline: true, muted: true });
-    video.muted = true;
-    let facing = 'environment';
-    const start = async () => {
-      stop();
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: facing, width: { ideal: 1920 }, height: { ideal: 1440 } }, audio: false,
-      });
-      video.srcObject = stream;
-      await video.play().catch(() => {});
-    };
-    await start();
-
-    const ghost = latest ? h('img', { class: 'ghost', src: latest.photo_url, alt: '' }) : null;
-    const finder = h('div', { class: 'viewfinder' }, video, ghost,
-      h('span', { html: '<svg class="grid-lines" viewBox="0 0 3 3" preserveAspectRatio="none"><path d="M1 0v3M2 0v3M0 1h3M0 2h3" stroke="rgba(255,255,255,.28)" stroke-width=".01" vector-effect="non-scaling-stroke"/></svg>', style: { display: 'contents' } }),
-      h('div', { class: 'hint' }, latest ? '흐린 지난 사진에 화분을 맞춰 주세요' : '식물 전체와 자가 함께 나오게 찍어 주세요'));
-    const slider = latest ? h('label', { class: 'ghost-slider' }, '겹쳐 보기',
-      h('input', {
-        type: 'range', min: 0, max: 70, value: 35, 'aria-label': '지난 사진 투명도',
-        oninput: (e) => finder.style.setProperty('--ghost', e.target.value / 100),
-      })) : null;
-
-    const shoot = async () => {
-      if (!video.videoWidth) return;
-      const c = document.createElement('canvas');
-      c.width = video.videoWidth;
-      c.height = video.videoHeight;
-      c.getContext('2d').drawImage(video, 0, 0);
-      const blob = await canvasToBlob(c, 0.92);
-      await submit(blob, null);
-    };
-
-    const cam = h('div', { class: 'camera' },
-      h('div', { class: 'camera-top' },
-        h('button', { class: 'icon-btn', 'aria-label': '닫기', html: icons.close, onclick: () => { stop(); goBack(`#/plant/${plant.id}`); } }),
-        h('div', { class: 'camera-title' }, plant.name),
-        h('span', { class: 'topbar-spacer' })),
-      finder,
-      slider,
-      h('div', { class: 'camera-bottom' },
-        h('div', { class: 'cam-side' }, h('button', { class: 'icon-btn', 'aria-label': '앨범에서 선택', html: icons.image, onclick: () => albumInput.click() }), '앨범'),
-        h('button', { class: 'shutter', 'aria-label': '촬영', onclick: shoot }),
-        h('div', { class: 'cam-side' }, h('button', {
-          class: 'icon-btn', 'aria-label': '카메라 전환', html: icons.flip,
-          onclick: async () => { facing = facing === 'environment' ? 'user' : 'environment'; await start().catch(() => {}); },
-        }), '전환')),
-      camInput, albumInput);
-    screen.className = 'screen flush';
-    screen.replaceChildren(cam);
+    fileMode(null); // 카메라를 닫으면 보이는 화면
+    cam = await openCamera({
+      title: plant.name,
+      hint: latest ? '흐린 지난 사진에 화분을 맞춰 주세요' : '식물 전체와 자가 함께 나오게 찍어 주세요',
+      ghostUrl: latest ? latest.photo_url : null,
+      onShot: (blob) => submit(blob, null),
+      onAlbum: async (file) => submit(file, await readExifDate(file)),
+      onClose: () => { cam = null; goBack(`#/plant/${plant.id}`); },
+    });
   }
 
   // ------------------------------------------------------------ 기본 모드: 휴대폰 카메라 앱 사용

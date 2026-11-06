@@ -138,3 +138,9 @@ def test_axis_search_fixes_misestimated_axis(monkeypatch):
     assert unfixed < ideal * 0.85, "축이 어긋나면 서로 깎아 부피가 줄어듦"
     assert abs(fixed["volume_px"] / ideal - 1) < 0.05
     assert any(abs(v["offset"]) > 10 for v in fixed["detail"]["views"])
+
+
+def test_result_is_json_serializable():
+    import json
+    res = compute_scan(views(ASYM), top_mask=render_top(ASYM, scale=1.1, orient=3))
+    json.dumps(res)  # numpy 값이 섞이면 실패

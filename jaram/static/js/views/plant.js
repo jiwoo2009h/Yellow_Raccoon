@@ -5,6 +5,8 @@ import {
 } from '../ui.js';
 import { lineChart, sparkline } from '../chart.js';
 import { careSheet, envSheet, actionSheet, careIcon } from '../sheets.js';
+import { lazyViewer } from '../viewer3d.js';
+import { volumeUnit } from './scanResult.js';
 
 export async function plantView({ id }) {
   const screen = document.getElementById('screen');
@@ -52,6 +54,8 @@ export async function plantView({ id }) {
         content.push(chartCard(p));
       }
     }
+    content.push(h('h2', { class: 'section-title' }, '3D 생장', p.scans.length ? h('small', null, `${p.scans.length}회 측정`) : null));
+    content.push(scanCard(p));
     content.push(h('h2', { class: 'section-title' }, '환경',
       h('button', { class: 'section-link', onclick: async () => { const u = await envSheet(p, lastEnv(p)); if (u) rerender(u); } }, '기록하기')));
     content.push(envCard(p, th));
@@ -219,6 +223,56 @@ export async function plantView({ id }) {
     };
     card.append(segmented([['area', '면적'], ['height', '높이'], ['width', '폭'], ['rate', '생장률']], ui.metric, (v) => { ui.metric = v; draw(); }), box, note);
     draw();
+    return card;
+  }
+
+  // ------------------------------------------------------------ 3D 생장
+  function scanCard(p) {
+    const scans = p.scans;
+    if (!scans.length) {
+      return h('section', { class: 'card scan-empty' },
+        h('div', { class: 'list-icon accent', html: icons.cube }),
+        h('div', { class: 'grow' },
+          h('h3', { class: 'card-title' }, '여러 각도로 찍어 부피를 재요'),
+          h('p', { class: 'card-sub' }, '식물 둘레 4방향(+위)에서 찍으면 앞뒤로 자라는 잎까지 반영한 3D 부피를 계산해요. 일주일에 한 번 정도면 충분해요.'),
+          h('a', { class: 'btn btn-soft btn-md', href: `#/plant/${p.id}/scan`, style: { marginTop: '12px' } },
+            h('span', { html: icons.cube, style: { display: 'contents' } }), '3D 측정하기')));
+    }
+    const last = scans[scans.length - 1];
+    const vu = volumeUnit(p.unit);
+    const digits = p.unit === 'cm' ? 1 : 0;
+    const d = last.delta;
+    const t0 = parseDate(scans[0].taken_at).getTime();
+    const card = h('section', { class: 'card' },
+      h('div', { class: 'scan-head' },
+        h('a', { class: 'scan-mini', href: `#/scan/${last.id}`, 'aria-label': '최근 3D 측정 자세히 보기' },
+          lazyViewer(last.points_url, { height: 132, label: '최근 3D 모양' })),
+        h('div', { class: 'grow' },
+          h('div', { class: 'stat-label' }, `최근 3D 부피 · ${dateShort(last.taken_at)}`),
+          h('div', { class: 'stat-value' }, fmt(last.volume, digits), h('small', null, vu)),
+          h('div', { class: 'stat-delta' }, d
+            ? h('span', null, deltaEl(d.volume_pct, { suffix: '%' }), h('span', { class: 'muted' }, ` ${daysText(d.days)} 전 대비`))
+            : h('span', { class: 'muted' }, '첫 3D 측정')),
+          d && d.volume_pct_per_day !== null && d.volume_pct_per_day !== undefined
+            ? h('div', { class: 'caption' }, `부피 생장률 ${signed(d.volume_pct_per_day)}%/일`) : null)),
+      scans.length >= 2 ? h('div', { style: { marginTop: '16px' } }, lineChart({
+        series: [{ name: '3D 부피', color: 'var(--chart-line)', points: scans.map((sc) => ({ x: (parseDate(sc.taken_at).getTime() - t0) / 86400000, y: sc.volume })) }],
+        xTick: (x) => dateShort(new Date(t0 + x * 86400000)),
+        tipTitle: (x) => dateLong(new Date(t0 + x * 86400000)),
+        yFormat: (v) => fmt(v, digits) + (p.unit === 'cm' ? 'cm³' : ''),
+        height: 160,
+        ariaLabel: `${p.name} 3D 부피 변화 그래프`,
+        tableHead: '날짜',
+      })) : null,
+      h('div', { class: 'list', style: { margin: '12px -20px 0', background: 'transparent' } },
+        [...scans].reverse().slice(0, 4).map((sc) => h('a', { class: 'list-item', href: `#/scan/${sc.id}` },
+          sc.thumb_url ? h('img', { class: 'tl-photo', src: sc.thumb_url, alt: '', loading: 'lazy' }) : h('div', { class: 'list-icon', html: icons.cube }),
+          h('div', { class: 'grow' },
+            h('div', { class: 'title' }, `${fmt(sc.volume, digits)} ${vu}`),
+            h('div', { class: 'meta' }, dateLong(sc.taken_at), sc.delta && sc.delta.volume_pct !== null ? ' · ' : '', sc.delta && sc.delta.volume_pct !== null ? deltaEl(sc.delta.volume_pct, { suffix: '%' }) : '')),
+          h('span', { class: 'chev', html: icons.chevron, style: { display: 'contents' } })))),
+      h('a', { class: 'btn btn-soft btn-md', href: `#/plant/${p.id}/scan`, style: { marginTop: '8px' } },
+        h('span', { html: icons.cube, style: { display: 'contents' } }), '3D 측정하기'));
     return card;
   }
 

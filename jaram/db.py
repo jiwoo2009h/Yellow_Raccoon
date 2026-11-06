@@ -98,6 +98,7 @@ CREATE TABLE IF NOT EXISTS scan_views (
     area_px    REAL,
     roi        TEXT,
     warnings   TEXT,
+    metrics    TEXT,
     created_at TEXT NOT NULL
 );
 
@@ -119,6 +120,7 @@ def connect(path):
 # 기존 DB 에 나중에 추가된 칸 (이미 실험 데이터가 있는 DB 도 안전하게 업그레이드)
 MIGRATIONS = [
     ("plants", "roi", "TEXT"),
+    ("scan_views", "metrics", "TEXT"),
 ]
 
 

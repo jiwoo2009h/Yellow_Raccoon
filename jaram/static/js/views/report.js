@@ -49,6 +49,27 @@ export async function reportView() {
       chartBox));
   draw();
 
+  // ------------------------------------------------------------ 3D 부피 곡선
+  if (plants.some((p) => (p.scans || []).length >= 2)) {
+    screen.append(h('h2', { class: 'section-title' }, '3D 부피 곡선'),
+      h('section', { class: 'card' },
+        h('p', { class: 'card-sub', style: { marginBottom: '12px' } }, '여러 각도로 찍은 3D 측정의 부피를 첫 측정 대비 %로 비교해요. 잎이 앞뒤로 자라는 변화까지 반영돼요.'),
+        lineChart({
+          series: plants.map((p, i) => ({
+            name: p.name, color: colorOf(i),
+            points: (p.scans || []).map((sc) => ({ x: Math.round(sc.day * 10) / 10, y: sc.volume_pct })),
+          })),
+          xTick: (x) => `${fmt(x, 0)}일`,
+          tipTitle: (x) => `첫 3D 측정 후 ${fmt(x, 1)}일`,
+          yFormat: (v) => `${signed(v, 0)}%`,
+          yZero: true,
+          height: 220,
+          ariaLabel: '식물별 3D 부피 변화율 비교 그래프',
+          tableHead: '경과일',
+        }),
+        h('a', { class: 'btn btn-text', href: '/api/export_scans.csv', download: '', style: { marginTop: '4px' } }, '3D 측정 CSV 받기')));
+  }
+
   // ------------------------------------------------------------ 식물별 요약
   screen.append(h('h2', { class: 'section-title' }, '식물별 요약'));
   screen.append(h('div', { class: 'list' }, plants.map((p, i) => {

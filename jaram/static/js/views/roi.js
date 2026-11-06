@@ -20,11 +20,43 @@ export async function roiView({ id }) {
     return;
   }
   const m = ms[ms.length - 1];
-  let r = plant.roi ? [...plant.roi] : [0.08, 0.06, 0.92, 0.94];
+  const editor = roiEditor(m.photo_url, plant.roi);
+  async function save(roi) {
+    try {
+      await api.updatePlant(id, { roi });
+      const ok = await confirmSheet({
+        title: '지금까지 찍은 사진도 다시 분석할까요?',
+        desc: roi ? '새 영역으로 모든 사진의 높이·폭·면적을 다시 계산해요. 그래프와 추천도 함께 바뀌어요.' : '영역 제한 없이 모든 사진을 다시 계산해요.',
+        ok: '다시 분석',
+      });
+      if (ok) {
+        toast('다시 분석하는 중이에요…');
+        const res = await api.reanalyze(id);
+        toast(`${res.ok}장을 다시 분석했어요${res.failed ? ` (${res.failed}장은 영역 안에서 식물을 못 찾음)` : ''}`);
+      } else toast(roi ? '분석 영역을 저장했어요' : '분석 영역을 해제했어요');
+      goBack(`#/plant/${id}`);
+    } catch (err) { toast(err.message, { error: true }); }
+  }
 
+  screen.replaceChildren(...[
+    topbar({ title: '분석 영역' }),
+    h('section', { class: 'card', style: { marginTop: '4px', marginBottom: '12px' } },
+      h('h2', { class: 'card-title' }, '이 식물이 있는 곳만 지정하세요'),
+      h('p', { class: 'card-sub', style: { margin: 0 } }, '사각형을 끌어 옮기거나 모서리로 크기를 바꾸세요. 빈 곳을 끌면 새로 그려요. 옆 화분 잎이나 초록색 소품이 섞일 때 쓰면 좋아요.')),
+    editor.stage,
+    editor.readout,
+    h('p', { class: 'caption', style: { margin: '4px 4px 0' } }, `${dateShort(m.taken_at)} 사진 · 같은 위치에서 찍은 모든 사진에 같은 영역이 적용돼요.`),
+    plant.roi ? h('button', { class: 'btn btn-text', style: { marginTop: '8px' }, onclick: () => save(null) }, '영역 해제') : null,
+    h('div', { class: 'cta' }, h('button', { class: 'btn btn-primary', onclick: () => save(editor.get()) }, '영역 저장')),
+  ].filter(Boolean));
+}
+
+/** 사진 위 사각형 영역 편집기 (끌어 옮기기·모서리로 크기 조절·빈 곳을 끌어 새로 그리기) */
+export function roiEditor(photoUrl, initial) {
+  let r = initial ? [...initial] : [0.08, 0.06, 0.92, 0.94];
   const handles = ['nw', 'ne', 'sw', 'se'].map((c) => h('span', { class: `roi-handle ${c}`, dataset: { c } }));
   const box = h('div', { class: 'roi-box' }, ...handles);
-  const img = h('img', { src: m.photo_url, alt: '분석 영역을 지정할 사진', draggable: 'false' });
+  const img = h('img', { src: photoUrl, alt: '영역을 지정할 사진', draggable: 'false' });
   const stage = h('div', { class: 'calib roi-stage' }, img, box);
   const readout = h('div', { class: 'caption', style: { marginTop: '8px' } });
 
@@ -35,12 +67,10 @@ export async function roiView({ id }) {
     box.style.height = `${(r[3] - r[1]) * 100}%`;
     readout.textContent = `영역: 가로 ${fmt((r[2] - r[0]) * 100, 0)}% × 세로 ${fmt((r[3] - r[1]) * 100, 0)}% · 바깥의 초록색은 분석에서 빠져요`;
   }
-
   const point = (e) => {
     const rect = stage.getBoundingClientRect();
     return [clamp((e.clientX - rect.left) / rect.width), clamp((e.clientY - rect.top) / rect.height)];
   };
-
   let mode = null;
   let start = null;
   let startR = null;
@@ -82,34 +112,7 @@ export async function roiView({ id }) {
   };
   stage.addEventListener('pointerup', end);
   stage.addEventListener('pointercancel', end);
-
-  async function save(roi) {
-    try {
-      await api.updatePlant(id, { roi });
-      const ok = await confirmSheet({
-        title: '지금까지 찍은 사진도 다시 분석할까요?',
-        desc: roi ? '새 영역으로 모든 사진의 높이·폭·면적을 다시 계산해요. 그래프와 추천도 함께 바뀌어요.' : '영역 제한 없이 모든 사진을 다시 계산해요.',
-        ok: '다시 분석',
-      });
-      if (ok) {
-        toast('다시 분석하는 중이에요…');
-        const res = await api.reanalyze(id);
-        toast(`${res.ok}장을 다시 분석했어요${res.failed ? ` (${res.failed}장은 영역 안에서 식물을 못 찾음)` : ''}`);
-      } else toast(roi ? '분석 영역을 저장했어요' : '분석 영역을 해제했어요');
-      goBack(`#/plant/${id}`);
-    } catch (err) { toast(err.message, { error: true }); }
-  }
-
-  screen.replaceChildren(
-    topbar({ title: '분석 영역' }),
-    h('section', { class: 'card', style: { marginTop: '4px', marginBottom: '12px' } },
-      h('h2', { class: 'card-title' }, '이 식물이 있는 곳만 지정하세요'),
-      h('p', { class: 'card-sub', style: { margin: 0 } }, '사각형을 끌어 옮기거나 모서리로 크기를 바꾸세요. 빈 곳을 끌면 새로 그려요. 옆 화분 잎이나 초록색 소품이 섞일 때 쓰면 좋아요.')),
-    stage,
-    readout,
-    h('p', { class: 'caption', style: { margin: '4px 4px 0' } }, `${dateShort(m.taken_at)} 사진 · 같은 위치에서 찍은 모든 사진에 같은 영역이 적용돼요.`),
-    plant.roi ? h('button', { class: 'btn btn-text', style: { marginTop: '8px' }, onclick: () => save(null) }, '영역 해제') : null,
-    h('div', { class: 'cta' }, h('button', { class: 'btn btn-primary', onclick: () => save(r.map((v) => Math.round(v * 10000) / 10000)) }, '영역 저장')));
   if (img.complete) draw(); else img.addEventListener('load', draw);
   draw();
+  return { stage, readout, get: () => r.map((v) => Math.round(v * 10000) / 10000) };
 }

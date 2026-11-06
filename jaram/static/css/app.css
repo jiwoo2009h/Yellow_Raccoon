@@ -692,4 +692,39 @@ table.data tr:last-child td { border-bottom: 0; }
 .login { padding-top: 12vh; }
 .login-logo { width: 72px; height: 72px; border-radius: 20px; margin: 0 auto 20px; }
 
+/* ---------------------------------------------------------------- 3D 측정 */
+.viewer3d { position: relative; width: 100%; border-radius: 16px; background: var(--surface-2); overflow: hidden; touch-action: none; }
+.viewer3d canvas { display: block; cursor: grab; }
+.viewer3d canvas:active { cursor: grabbing; }
+.viewer3d-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--text-3); font-size: 14px; }
+.viewer-caption { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 4px 2px; font-size: 13px; color: var(--text-3); }
+.big-volume { font-size: 40px; font-weight: 700; letter-spacing: -0.03em; line-height: 1.15; }
+.big-volume small { font-size: 18px; font-weight: 600; color: var(--text-3); margin-left: 4px; }
+.scan-guide { display: flex; gap: 16px; align-items: center; }
+.scan-diagram { width: 124px; height: 112px; flex: none; }
+.scan-step { gap: 12px; }
+.step-thumb { width: 56px; height: 56px; border-radius: 14px; overflow: hidden; flex: none; background: var(--surface-2); padding: 0; }
+.step-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.step-thumb.empty { display: grid; place-items: center; font-size: 13px; font-weight: 700; color: var(--text-3); border: 1.5px dashed var(--line); background: transparent; }
+.step-ok { display: inline-flex; margin-left: 6px; color: var(--accent-text); vertical-align: -3px; }
+.step-ok svg { width: 18px; height: 18px; }
+.spinner.small { width: 22px; height: 22px; border-width: 2.5px; border-color: var(--surface-3); border-top-color: var(--accent); }
+.scan-empty { display: flex; gap: 14px; align-items: flex-start; }
+.scan-head { display: flex; gap: 14px; align-items: center; }
+.scan-mini { width: 132px; flex: none; border-radius: 16px; overflow: hidden; }
+.views-strip { display: flex; gap: 10px; overflow-x: auto; margin: 0 -20px; padding: 2px 20px 4px; scrollbar-width: none; }
+.views-strip::-webkit-scrollbar { display: none; }
+.view-chip { margin: 0; flex: none; width: 104px; }
+.view-chip img { width: 104px; height: 138px; object-fit: cover; border-radius: 14px; background: var(--surface-2); }
+.view-chip figcaption { font-size: 13px; font-weight: 600; margin-top: 6px; color: var(--text-2); }
+/* 카메라 수평계 */
+.level { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; padding: 6px 12px 6px 6px; border-radius: 999px; background: rgba(0, 0, 0, 0.5); font-size: 13px; font-weight: 600; }
+.level-ring { width: 40px; height: 40px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.6); display: grid; place-items: center; }
+.level-bubble { width: 12px; height: 12px; border-radius: 50%; background: #ffcc33; transition: transform 0.08s linear; }
+.level.ok .level-bubble { background: #5cd69a; }
+.level.ok { color: #5cd69a; }
+.level-ask { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); padding: 8px 14px; border-radius: 999px; background: rgba(0, 0, 0, 0.55); color: #fff; font-size: 13px; font-weight: 600; }
+.cam-extra { color: #fff !important; min-width: 44px; }
+.camera-top .btn-text[hidden] { display: none; }
+
 .footer-note { text-align: center; font-size: 13px; color: var(--text-4); margin-top: 32px; }

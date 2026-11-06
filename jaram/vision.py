@@ -112,13 +112,21 @@ class PlantAnalyzer:
         pieces.sort(key=cv2.contourArea, reverse=True)
         main = pieces[0]
         if prefer == "center":
-            big = [c for c in pieces if cv2.contourArea(c) >= 0.3 * cv2.contourArea(pieces[0])]
+            # 너무 작은 조각은 빼고, 좌우 가장자리에 걸친 덩어리(옆 화분)는 다른 후보가 있으면 뺍니다.
+            # 어린 식물은 뒤쪽 화분보다 작을 수 있어 크기 기준은 가장 큰 덩어리의 10%로 느슨하게 둡니다.
+            big = [c for c in pieces if cv2.contourArea(c) >= 0.1 * cv2.contourArea(pieces[0])]
+
+            def at_edge(c):
+                x, y, w, h = cv2.boundingRect(c)
+                return x <= 1 or x + w >= img_w - 1
+
+            inner = [c for c in big if not at_edge(c)]
 
             def center_dist(c):
                 x, y, w, h = cv2.boundingRect(c)
                 return abs(x + w / 2 - img_w / 2)
 
-            main = min(big, key=center_dist)
+            main = min(inner or big, key=center_dist)
             pieces = [main] + [c for c in pieces if c is not main]
         if cv2.contourArea(main) < img_w * img_h * 0.003:
             return [], None

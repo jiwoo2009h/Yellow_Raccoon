@@ -293,8 +293,23 @@ def _ellipse_points(a0, a1, height):
     return pts[:MAX_POINTS]
 
 
+def _py(obj):
+    """numpy 숫자·불리언을 일반 파이썬 값으로 (JSON 저장용)"""
+    if isinstance(obj, dict):
+        return {k: _py(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_py(v) for v in obj]
+    if isinstance(obj, np.bool_):
+        return bool(obj)
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.floating):
+        return float(obj)
+    return obj
+
+
 def _result(volume, height, sides, top_info, warnings, method, width, depth, top_area, points):
-    return {
+    return _py({
         "method": method,
         "volume_px": volume,
         "height_px": float(height),
@@ -310,4 +325,4 @@ def _result(volume, height, sides, top_info, warnings, method, width, depth, top
                 "used": top_info["used"], "orient": top_info["orient"], "fit": round(top_info["fit"], 3),
                 "iou": round(top_info["iou"], 3), "scale": round(top_info["scale"], 4)},
         },
-    }
+    })

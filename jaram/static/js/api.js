@@ -56,5 +56,19 @@ export const api = {
   saveSettings: (thresholds) => request('PUT', '/api/settings', { thresholds }),
   resetSettings: () => request('POST', '/api/settings/reset'),
   report: () => request('GET', '/api/report'),
+  // 3D 측정
+  createScan: (plantId, body = {}) => request('POST', `/api/plants/${plantId}/scans`, body),
+  scan: (id) => request('GET', `/api/scans/${id}`),
+  uploadScanView: (id, blob, kind, angle) => {
+    const fd = new FormData();
+    fd.append('photo', blob, 'view.jpg');
+    fd.append('kind', kind);
+    if (angle !== null && angle !== undefined) fd.append('angle', String(angle));
+    return request('POST', `/api/scans/${id}/views`, fd, { form: true });
+  },
+  updateScanView: (id, viewId, body) => request('PATCH', `/api/scans/${id}/views/${viewId}`, body),
+  deleteScanView: (id, viewId) => request('DELETE', `/api/scans/${id}/views/${viewId}`),
+  computeScan: (id) => request('POST', `/api/scans/${id}/compute`),
+  deleteScan: (id) => request('DELETE', `/api/scans/${id}`),
   backupUrl: '/api/backup.zip',
 };

@@ -78,3 +78,17 @@ def test_backup_zip_contains_db_and_photos(client):
     assert "jaram.db" in names
     assert sum(n.startswith("uploads/") for n in names) == 3  # 사진·마스크·분석 이미지
     res.close()
+
+
+def test_new_endpoints_need_login_and_app_header(locked):
+    for url in ("/api/settings/suggest?species=basil", "/api/validation", "/api/validation.csv",
+                "/api/export_scans.csv", "/api/scans/1"):
+        assert locked.get(url).status_code == 401, url
+    assert locked.post("/api/plants/1/scans", json={}).status_code == 401
+    assert login(locked).status_code == 200
+    pid = locked.post("/api/plants", json={"name": "바질", "species": "basil"}, headers=H).get_json()["id"]
+    # 로그인했어도 앱 표시(X-Requested-With) 없는 쓰기 요청은 거절 (CSRF 방지)
+    assert locked.post(f"/api/plants/{pid}/scans", json={}).status_code == 403
+    assert locked.post(f"/api/plants/{pid}/scans", json={}, headers=H).status_code == 201
+    assert locked.get("/api/validation").status_code == 200
+    assert locked.get("/api/settings/suggest?species=basil").status_code == 200

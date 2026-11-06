@@ -32,7 +32,13 @@ const SCREENS = [
   { name: '10 식물 등록', route: '/plant/new' },
   { name: '11 식물 선택 시트', route: '/', action: 'picker', viewport: true },
   { name: '12 관리 기록 시트', route: '/plant/3', action: 'care', viewport: true },
-  { name: '13 로그인', route: '/', action: 'login', viewport: true },
+  { name: '13 분석 영역 지정', route: '/plant/2/roi', viewport: true },
+  { name: '14 3D 측정 촬영', route: '/plant/4/scan' },
+  { name: '15 3D 측정 결과', route: '/scan/LATEST_SCAN' },
+  { name: '16 기준 제안 시트', route: '/settings/species/basil', action: 'suggest', viewport: true },
+  { name: '17 추천 효과 검증', route: '/report/validation' },
+  // 로그인 화면을 띄우면 다른 화면으로 돌아가지 않으므로 맨 마지막에
+  { name: '18 로그인', route: '/', action: 'login', viewport: true },
 ];
 
 // ---------------------------------------------------------------- 1. 화면 읽기
@@ -42,8 +48,10 @@ async function extractAll() {
     console.error('Playwright 가 필요해요: npm i -D playwright && npx playwright install chromium');
     process.exit(1);
   }
-  const latest = await fetch(`${BASE}/api/plants/2`).then((r) => r.json()).then((p) => p.measurements.at(-1).id)
+  const plant2 = await fetch(`${BASE}/api/plants/2`).then((r) => r.json())
     .catch(() => { throw new Error(`서버(${BASE})에서 식물 2번을 찾을 수 없어요. 데모 데이터로 서버를 켜 주세요.`); });
+  const latest = plant2.measurements.at(-1).id;
+  const latestScan = (plant2.scans || []).at(-1)?.id ?? 1;
   const browser = await chromium.launch();
   const result = {};
   for (const theme of ['light', 'dark']) {
@@ -57,8 +65,9 @@ async function extractAll() {
     }
     for (const s of SCREENS) {
       await page.setViewportSize({ width: 390, height: 844 });
-      await page.goto(`${BASE}/#${s.route.replace('LATEST', latest)}`);
+      await page.goto(`${BASE}/#${s.route.replace('LATEST_SCAN', latestScan).replace('LATEST', latest)}`);
       await page.waitForTimeout(1300);
+      if (s.action === 'suggest') { await page.click('.suggest-entry'); await page.waitForSelector('.suggest-item'); await page.waitForTimeout(700); }
       if (s.action === 'picker') { await page.click('.tab-capture'); await page.waitForTimeout(900); }
       if (s.action === 'care') { await page.click('.cta .btn-secondary'); await page.waitForTimeout(900); }
       if (s.action === 'login') { await page.evaluate(() => window.dispatchEvent(new CustomEvent('jaram:login-required'))); await page.waitForTimeout(600); }

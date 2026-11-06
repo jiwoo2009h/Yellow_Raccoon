@@ -308,6 +308,16 @@ async function extractTree(opts = {}) {
     return { t: 'image', name: 'photo', x, y, w, h, img: key, radius: radii(cs, w, h) };
   }
 
+  // 캔버스(3D 미리보기 등)는 지금 그려진 그림을 PNG 이미지로
+  function canvasNode(el, cs, r) {
+    if (r.width <= 1 || r.height <= 1 || !el.width || !el.height) return null;
+    let data;
+    try { data = el.toDataURL('image/png').split(',')[1]; } catch (e) { return null; }
+    const key = `img${Object.keys(images).length + 1}`;
+    images[key] = data;
+    return { t: 'image', name: 'canvas', x: r.left, y: r.top, w: r.width, h: r.height, img: key, radius: radii(cs, r.width, r.height) };
+  }
+
   // ------------------------------------------------------------ 박스 스타일
   function boxStyle(el, cs, r) {
     const st = {};
@@ -374,8 +384,8 @@ async function extractTree(opts = {}) {
     if (['SCRIPT', 'STYLE', 'NOSCRIPT', 'VIDEO', 'TEMPLATE'].includes(el.tagName)) return null;
     if (cs.display === 'contents') return convChildren(el);
     const r = el.getBoundingClientRect();
-    if (el.tagName.toLowerCase() === 'svg' || el.tagName === 'IMG') {
-      const leaf = el.tagName === 'IMG' ? imageNode(el, cs, r) : svgNode(el, r);
+    if (el.tagName.toLowerCase() === 'svg' || el.tagName === 'IMG' || el.tagName === 'CANVAS') {
+      const leaf = el.tagName === 'IMG' ? imageNode(el, cs, r) : el.tagName === 'CANVAS' ? canvasNode(el, cs, r) : svgNode(el, r);
       if (leaf && cs.position === 'absolute') leaf.abs = true;
       return leaf;
     }

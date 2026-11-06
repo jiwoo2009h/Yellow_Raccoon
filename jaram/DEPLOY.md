@@ -97,6 +97,9 @@ cd ~/Yellow_Raccoon && git pull
 
 그다음 Web 탭에서 **Reload** 를 누르면 끝이에요. (`requirements-server.txt` 가 바뀌었다면 `source ~/jaram-venv/bin/activate` 후 `pip install --no-cache-dir -r jaram/requirements-server.txt` 도 해 주세요.)
 
+- 새 기능 때문에 DB 구조가 바뀌어도(예: 분석 영역, 3D 측정) 서버가 시작할 때 **필요한 칸과 표를 자동으로 추가**해요. 이미 모은 기록은 그대로 남아요. 그래도 업데이트 전에 **전체 백업 받기**를 한 번 해 두세요.
+- 3D 측정은 한 번에 사진 4~5장과 분석 이미지를 저장해서 약 2~4MB를 써요. 무료 계정 저장 공간(512MB)이면 식물 4개를 매주 3D 측정해도 한 학기는 충분하지만, Files 탭에서 가끔 사용량을 확인하세요.
+
 ## 이미 모은 데이터 옮기기 / 백업 복원하기
 
 1. 컴퓨터에서 쓰던 자람의 **설정 → 전체 백업 받기** 로 zip 파일을 받습니다.

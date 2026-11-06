@@ -738,8 +738,8 @@ table.data tr:last-child td { border-bottom: 0; }
 .suggest-item input[type="checkbox"] { width: 22px; height: 22px; margin: 1px 0 0; flex: none; accent-color: var(--accent); }
 .suggest-dot { width: 22px; height: 22px; flex: none; display: grid; place-items: center; }
 .suggest-dot::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--text-4); }
-.suggest-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; flex-wrap: wrap; }
-.suggest-head .title { font-weight: 600; font-size: 15px; }
+.suggest-head { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+.suggest-head .title { font-weight: 600; font-size: 15px; min-width: 0; }
 .suggest-head .vals { font-size: 15px; color: var(--text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .suggest-head .vals .arrow { color: var(--text-4); margin: 0 6px; }
 .suggest-head .vals b { color: var(--accent-text); font-weight: 700; }
@@ -760,16 +760,19 @@ table.data tr:last-child td { border-bottom: 0; }
 .vc-num { font-size: 20px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
 .cmp { display: flex; flex-direction: column; gap: 10px; }
 .cmp-title { font-size: 13px; color: var(--text-3); font-weight: 500; }
-.cmp-row { display: grid; grid-template-columns: 72px minmax(0, 1fr) 64px; align-items: center; gap: 10px; }
-.cmp-label { font-size: 14px; font-weight: 600; color: var(--text-1); white-space: nowrap; }
+.cmp-row { display: flex; align-items: center; gap: 10px; }
+.cmp-label { width: 72px; flex: none; font-size: 14px; font-weight: 600; color: var(--text-1); white-space: nowrap; }
 .cmp-label small { font-weight: 500; color: var(--text-3); font-size: 12px; }
-.cmp-track { position: relative; height: 22px; }
+.cmp-track { position: relative; height: 22px; flex: 1; min-width: 0; }
 .cmp-zero { position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: var(--chart-axis); }
 .cmp-bar { position: absolute; top: 6px; height: 10px; border-radius: 0 4px 4px 0; }
 .cmp-bar.neg { border-radius: 4px 0 0 4px; }
 .cmp-bar.yes { background: var(--accent); }
 .cmp-bar.no { background: var(--text-3); }
-.cmp-val { font-size: 14px; font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; color: var(--text-1); }
+.cmp-val { width: 64px; flex: none; font-size: 14px; font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; color: var(--text-1); }
+.vc-note { display: flex; align-items: flex-start; gap: 6px; margin-top: 10px; }
+.vc-note .tag { flex: none; }
+.vc-note .caption { margin: 0; }
 
 /* ---------------- 알고리즘 설명 ---------------- */
 .algo-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 8px; color: var(--text-2); font-size: 15px; line-height: 1.55; }

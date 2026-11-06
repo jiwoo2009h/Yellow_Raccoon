@@ -63,8 +63,8 @@ function codeCard(c) {
         row('다음 측정에서 회복', (g) => pct(g.recovered)),
         row('토양 수분 변화', (g) => num(g.soil_change, '%p')),
         row('다음 3D 부피 생장률', (g) => (g.volume_rate_after === null || g.volume_rate_after === undefined ? '–' : `${fmt(g.volume_rate_after)}%/일`))))),
-    yes.small || no.small ? h('p', { class: 'caption', style: { margin: '10px 0 0' } },
-      h('span', { class: 'tag', style: { marginRight: '6px' } }, '표본 적음'), '한쪽이 3건 미만이라 차이를 일반화하기 어려워요.') : null);
+    yes.small || no.small ? h('div', { class: 'vc-note' },
+      h('span', { class: 'tag' }, '표본 적음'), h('p', { class: 'caption' }, '한쪽이 3건 미만이라 차이를 일반화하기 어려워요.')) : null);
 }
 
 export async function validationView() {

@@ -62,6 +62,7 @@ export const api = {
     return request('GET', `/api/settings/suggest?${q}`);
   },
   report: () => request('GET', '/api/report'),
+  validation: () => request('GET', '/api/validation'),
   // 3D 측정
   createScan: (plantId, body = {}) => request('POST', `/api/plants/${plantId}/scans`, body),
   scan: (id) => request('GET', `/api/scans/${id}`),

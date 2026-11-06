@@ -213,10 +213,13 @@ def jpeg_bytes(img):
 
 # 식물별 시나리오: 일차 -> (크기, 환경, 관리)
 PLANTS = [
-    # 바질 1: 정상 생육
+    # 바질 1: 정상 생육. 10일째 흙이 말라 생장이 잠깐 느려졌다가, 물주기 추천을 따른 뒤 회복 (추천 효과 검증용)
     {"name": "바질 1", "code": "B1", "species": "basil",
-     "growth": lambda d: 0.18 + 0.05 * d,
-     "env": lambda d: {"temp": 23 + (d % 3) * 0.6, "humidity": 55, "soil": 55 - (d % 3) * 8, "lux": 12000}},
+     "growth": lambda d: (0.18 + 0.05 * d if d <= 8 else
+                          0.58 + 0.008 * (d - 8) if d <= 10 else
+                          0.596 + (0.88 - 0.596) * (d - 10) / 4),
+     "env": lambda d: {"temp": 23 + (d % 3) * 0.6, "humidity": 55,
+                       "soil": {8: 31, 10: 20, 11: 58}.get(d, 55 - (d % 3) * 8), "lux": 12000}},
     # 바질 2: 후반에 흙이 마르면서 생장 둔화 -> 물주기 추천
     {"name": "바질 2", "code": "B2", "species": "basil",
      "growth": lambda d: 0.16 + 0.05 * min(d, 9) + 0.006 * max(0, d - 9),
@@ -286,7 +289,10 @@ def seed(data_dir):
                 patch["manual_height_cm"] = round(body["measurement"]["height_px"] / 40 * (1 + 0.04 * ((day % 3) - 1)), 1)
                 patch["manual_width_cm"] = round(body["measurement"]["width_px"] / 40 * 1.02, 1)
             client.patch(f"/api/measurements/{mid}", json=patch)
-            if spec["code"] in ("B1", "L1", "L2") and day in (1, 4, 8, 11):
+            if spec["code"] == "B1" and day in (1, 4, 10, 12):
+                client.post(f"/api/plants/{pid}/care",
+                            json={"kind": "water", "amount": 150, "at": (at + timedelta(hours=1)).isoformat()})
+            if spec["code"] in ("L1", "L2") and day in (1, 4, 8, 11):
                 client.post(f"/api/plants/{pid}/care",
                             json={"kind": "water", "amount": 150, "at": (at + timedelta(hours=1)).isoformat()})
             if spec["code"] == "B2" and day in (1, 5):

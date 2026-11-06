@@ -239,7 +239,8 @@ def test_old_or_single_scans_fall_back_to_2d():
     assert codes(r) == ["keep"]
     assert "높이와 투영 면적" in r["recs"][0]["body"]
     longer = dict(GENERAL_DEFAULTS, scan_max_age_days=10)
-    assert run3d(series_from(GROWING), old, general=longer)["facts"]["growth_source"] == "3d"
+    recent_old = scans_from([1000, 1035], [0, 7])  # 7일: 최근 사진 3장(6·8·10일) 구간과 겹침
+    assert run3d(series_from(GROWING), recent_old, general=longer)["facts"]["growth_source"] == "3d"
     single = run3d(series_from(GROWING), scans_from([1000], [10]))
     assert single["facts"]["growth_source"] == "2d"
 
@@ -268,3 +269,19 @@ def test_compound_volume_rate_does_not_flag_normal_young_growth():
     r = run3d(series_from(GROWING), scans_from([100, 481, 1361], [-4, 3, 10]))
     assert r["facts"]["volume_slowing"] is False
     assert codes(r) == ["keep"]
+
+
+def test_scan_older_than_recent_photo_window_defers_to_2d():
+    # 마지막 3D 측정(5일)은 7일 안이지만, 최근 생장률 구간(사진 6·8·10일)보다 앞섬 -> 새 사진(2D)이 우선
+    env = [env_at(11, soil=20)]
+    r = run3d(series_from(SLOWING), scans_from([1000, 1800], [0, 5]), env=env)
+    assert r["facts"]["growth_source"] == "2d"
+    assert r["facts"]["volume_stale"] is True
+    assert "water_needed" in codes(r)
+    assert "growth_mismatch" not in codes(r)
+
+
+def test_scan_at_window_start_does_not_overlap():
+    # 마지막 3D 측정이 정확히 최근 구간 시작(6일)이면 3D 구간(0~6일)과 최근 구간(6~10일)이 겹치지 않음
+    r = run3d(series_from(SLOWING), scans_from([1000, 1800], [0, 6]))
+    assert r["facts"]["volume_stale"] is True and r["facts"]["growth_source"] == "2d"

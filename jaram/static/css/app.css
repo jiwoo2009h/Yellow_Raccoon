@@ -748,3 +748,25 @@ table.data tr:last-child td { border-bottom: 0; }
 .suggest-item.none .method { color: var(--text-3); }
 .suggest-item .basis { font-size: 12px; color: var(--text-4); margin-top: 2px; line-height: 1.45; }
 .input-wrap.just-filled { box-shadow: 0 0 0 2px var(--accent); border-radius: var(--radius-sm); transition: box-shadow 0.3s var(--ease); }
+
+/* ---------------- 추천 효과 검증 ---------------- */
+.card-link { display: flex; align-items: center; gap: 12px; color: inherit; text-decoration: none; }
+.card-link .chev svg { width: 20px; height: 20px; color: var(--text-4); }
+.vc-list { display: flex; flex-direction: column; gap: 12px; }
+.vc-head { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
+.vc-head .grow { flex: 1; min-width: 0; }
+.vc-head .badge { flex: none; }
+.vc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.vc-num { font-size: 20px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.cmp { display: flex; flex-direction: column; gap: 10px; }
+.cmp-title { font-size: 13px; color: var(--text-3); font-weight: 500; }
+.cmp-row { display: grid; grid-template-columns: 72px minmax(0, 1fr) 64px; align-items: center; gap: 10px; }
+.cmp-label { font-size: 14px; font-weight: 600; color: var(--text-1); white-space: nowrap; }
+.cmp-label small { font-weight: 500; color: var(--text-3); font-size: 12px; }
+.cmp-track { position: relative; height: 22px; }
+.cmp-zero { position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: var(--chart-axis); }
+.cmp-bar { position: absolute; top: 6px; height: 10px; border-radius: 0 4px 4px 0; }
+.cmp-bar.neg { border-radius: 4px 0 0 4px; }
+.cmp-bar.yes { background: var(--accent); }
+.cmp-bar.no { background: var(--text-3); }
+.cmp-val { font-size: 14px; font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; color: var(--text-1); }

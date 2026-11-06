@@ -35,6 +35,7 @@ from flask import Flask, Response, g, jsonify, request, send_file, send_from_dir
 import db
 import scans_api
 import suggest as suggest_mod
+import validation as validation_mod
 from growth import parse_time, scan_series, with_units
 from recommend import evaluate
 from thresholds import SPECIES_KEYS, default_thresholds, merge_thresholds
@@ -842,6 +843,44 @@ def create_app(data_dir=None, password=None):
             "items": accuracy[-20:],
         }
         return jsonify(clean({"plants": out, "accuracy": acc}))
+
+    # ---------------- 추천 효과 검증 ----------------
+    def validation_report():
+        th = thresholds()
+        data = []
+        for p in db.rows(conn().execute("SELECT * FROM plants ORDER BY id")):
+            series = with_units(load_measurements(p["id"]), p["cm_per_px"])
+            env = db.rows(conn().execute("SELECT * FROM env_logs WHERE plant_id = ? ORDER BY at, id", (p["id"],)))
+            care = db.rows(conn().execute("SELECT * FROM care_logs WHERE plant_id = ? ORDER BY at, id", (p["id"],)))
+            data.append({"id": p["id"], "name": p["name"], "species": p["species"],
+                         "unit": "cm" if p["cm_per_px"] else "px",
+                         "series": series, "env": env, "care": care, "scans": load_scans(p)})
+        return validation_mod.validate(data, th)
+
+    @app.get("/api/validation")
+    def validation():
+        return jsonify(validation_report())
+
+    @app.get("/api/validation.csv")
+    def validation_csv():
+        rep = validation_report()
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow([label for _, label in validation_mod.CSV_COLUMNS])
+
+        def cell(v):
+            if v is None:
+                return ""
+            if isinstance(v, bool):
+                return "O" if v else "X"
+            if isinstance(v, float):
+                return f"{v:.3f}".rstrip("0").rstrip(".")
+            return v
+
+        for e in rep["events"]:
+            w.writerow([cell(e[k]) for k, _ in validation_mod.CSV_COLUMNS])
+        return Response("\ufeff" + buf.getvalue(), mimetype="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": "attachment; filename=jaram_validation.csv"})
 
     @app.get("/api/export.csv")
     def export_csv():

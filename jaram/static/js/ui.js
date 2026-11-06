@@ -90,12 +90,14 @@ export function fmt(v, digits = 1) {
   if (v === null || v === undefined || Number.isNaN(v)) return '–';
   const abs = Math.abs(v);
   const d = abs >= 1000 ? 0 : abs >= 100 ? Math.min(digits, 1) : digits;
-  return Number(v).toLocaleString('ko-KR', { maximumFractionDigits: d, minimumFractionDigits: 0 });
+  // 반올림하면 0이 되는 작은 음수가 '-0'으로 보이지 않게
+  const r = Math.round(Number(v) * 10 ** d) / 10 ** d;
+  return (r === 0 ? 0 : r).toLocaleString('ko-KR', { maximumFractionDigits: d, minimumFractionDigits: 0 });
 }
 export function signed(v, digits = 1) {
   if (v === null || v === undefined) return '–';
   const s = fmt(v, digits);
-  return v > 0 ? '+' + s : s;
+  return v > 0 && s !== '0' ? '+' + s : s;
 }
 export function areaUnit(unit) { return unit === 'cm' ? 'cm²' : 'px'; }
 

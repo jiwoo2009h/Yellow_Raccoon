@@ -169,6 +169,11 @@ def evaluate(series, env_logs, care_logs, species, general, now, unit="px", scan
 
     # 3D 측정이 최근에 2번 이상 있으면 부피 생장률을 우선 근거로, 정면 사진(2D)은 보조 근거로 씁니다.
     vol = volume_facts(scans, t, general, now)
+    # 3D 구간(직전 3D 측정 → 마지막 3D 측정)이 최근 생장률 구간(최근 사진들)과 겹쳐야 지금 상태를 나타냅니다.
+    # 마지막 3D 측정이 최근 구간의 시작 시점이거나 그보다 앞서면, 그 뒤 사진이 더 새로운 정보이므로 2D를 씁니다.
+    vol_stale = bool(vol and recent and parse_time(scans[-1]["taken_at"]) <= parse_time(series[recent["start"]]["taken_at"]))
+    if vol_stale:
+        vol = None
     if vol:
         growth_down = vol["down"]
         growing_well = vol["growing"]
@@ -190,6 +195,7 @@ def evaluate(series, env_logs, care_logs, species, general, now, unit="px", scan
         "growing_well": growing_well,
         "last_area_pct": last_drop,
         "growth_source": "3d" if vol else "2d",
+        "volume_stale": vol_stale,
         "volume_rate": vol["rate"] if vol else None,
         "volume_rate_prev": vol["prev"] if vol else None,
         "volume_slowing": vol["slowing"] if vol else None,

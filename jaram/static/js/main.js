@@ -14,11 +14,13 @@ import { roiView } from './views/roi.js';
 import { scanView } from './views/scan.js';
 import { scanResultView } from './views/scanResult.js';
 import { reportView } from './views/report.js';
+import { validationView } from './views/validation.js';
 import { settingsView, speciesSettingsView, generalSettingsView, algorithmView } from './views/settings.js';
 
 const routes = [
   ['/', homeView, 'home'],
   ['/report', reportView, 'report'],
+  ['/report/validation', validationView],
   ['/settings', settingsView, 'settings'],
   ['/settings/species/:key', speciesSettingsView],
   ['/settings/general', generalSettingsView],

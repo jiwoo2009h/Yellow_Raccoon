@@ -29,7 +29,7 @@ export async function settingsView() {
       row({ href: '#/settings/species/basil', icon: 'leaf', accent: true, title: '바질', meta: desc(sp.basil) }),
       row({ href: '#/settings/species/lettuce', icon: 'sprout', accent: true, title: '상추', meta: desc(sp.lettuce) }),
       row({ href: '#/settings/species/other', icon: 'sprout', title: '기타 식물', meta: desc(sp.other) }),
-      row({ href: '#/settings/general', icon: 'sliders', title: '공통 판단 기준', meta: `생장률 계산 간격 ${thresholds.general.rate_window}회 · 환경 지속 ${thresholds.general.persist_count}/${thresholds.general.env_lookback}회` })),
+      row({ href: '#/settings/general', icon: 'sliders', title: '공통 판단 기준', meta: `생장률 계산 간격 ${thresholds.general.rate_window}회 · 환경 지속 ${thresholds.general.persist_count}/${thresholds.general.env_lookback}회 · 3D ${thresholds.general.scan_max_age_days}일` })),
     h('h2', { class: 'section-title' }, '데이터'),
     h('div', { class: 'list' },
       h('a', { class: 'list-item', href: '/api/export.csv', download: '' },
@@ -77,6 +77,10 @@ const SECTIONS = [
     ['drop_alert', '급감 경고', '%', '한 번에 면적이 이만큼 줄면 시듦·촬영 오류를 확인하라고 알려요'],
     ['hue_drop', '잎 색 변화', 'Hue', '잎의 평균 색상이 처음보다 이만큼 노란 쪽으로 바뀌면 알려요'],
     ['water_interval_days', '물주기 확인 간격', '일', '토양 수분 기록이 없을 때, 물 준 지 이만큼 지나면 확인을 권해요'],
+  ]],
+  ['3D 생장 판단', '최근 3D 측정이 2번 이상 있으면 부피 변화로 생장을 먼저 판단하고, 정면 사진은 보조 근거로 써요.', [
+    ['volume_slowdown_ratio', '부피 둔화 기준', '%', '최근 3D 구간의 부피 생장률이 그 전 구간보다 이만큼 줄면 "생장 둔화"'],
+    ['volume_stagnation_rate', '부피 정체 기준', '%/일', '부피 생장률이 하루 이 값보다 낮으면 "정체". 모양이 그대로 커지면 부피는 면적보다 약 1.5배 빠르게 늘어요'],
   ]],
 ];
 
@@ -206,7 +210,10 @@ export async function generalSettingsView() {
       '최근 몇 번의 환경 기록을 함께 볼지 정해요.'),
     h('div', { style: { height: '18px' } }),
     field('"지속"으로 볼 횟수', numberInput({ name: 'persist_count', unit: '회', value: g.persist_count, step: 1, min: 1, max: 10 }),
-      '그중 몇 번 이상 기준을 벗어나야 "계속 벗어남"으로 판단할지 정해요. 센서 값이 한 번 튀어서 잘못 추천하는 것을 막아요.')),
+      '그중 몇 번 이상 기준을 벗어나야 "계속 벗어남"으로 판단할지 정해요. 센서 값이 한 번 튀어서 잘못 추천하는 것을 막아요.'),
+    h('div', { style: { height: '18px' } }),
+    field('3D 측정을 쓸 기간', numberInput({ name: 'scan_max_age_days', unit: '일', value: g.scan_max_age_days, step: 1, min: 1, max: 60 }),
+      '마지막 3D 측정이 이 기간 안에 있을 때만 부피 생장률로 판단해요. 오래된 3D 측정은 쓰지 않고 정면 사진으로 판단해요.')),
   h('div', { class: 'cta' }, h('button', { class: 'btn btn-primary', type: 'submit' }, '저장하기')));
   screen.replaceChildren(topbar({ title: '' }), form);
 }

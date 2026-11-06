@@ -87,7 +87,7 @@ export async function plantView({ id }) {
     const [first, ...rest] = p.recs;
     const card = h('section', { class: 'card status-card', style: { marginTop: '12px' }, 'aria-label': '상태와 추천' },
       h('div', { class: 'status-head' }, statusBadge(p.status, p.status_label),
-        h('span', { class: 'caption' }, '규칙 기반 추천')),
+        h('span', { class: 'caption' }, p.facts?.growth_source === '3d' ? '3D 부피 기준 추천' : '규칙 기반 추천')),
       recBlock(p, first, true),
       rest.map((r) => recBlock(p, r, false)));
     return card;
@@ -254,7 +254,7 @@ export async function plantView({ id }) {
             ? h('span', null, deltaEl(d.volume_pct, { suffix: '%' }), h('span', { class: 'muted' }, ` ${daysText(d.days)} 전 대비`))
             : h('span', { class: 'muted' }, '첫 3D 측정')),
           d && d.volume_pct_per_day !== null && d.volume_pct_per_day !== undefined
-            ? h('div', { class: 'caption' }, `부피 생장률 ${signed(d.volume_pct_per_day)}%/일`) : null)),
+            ? h('div', { class: 'caption' }, `하루 평균 부피 생장률 ${signed(d.volume_pct_per_day)}%`) : null)),
       scans.length >= 2 ? h('div', { style: { marginTop: '16px' } }, lineChart({
         series: [{ name: '3D 부피', color: 'var(--chart-line)', points: scans.map((sc) => ({ x: (parseDate(sc.taken_at).getTime() - t0) / 86400000, y: sc.volume })) }],
         xTick: (x) => dateShort(new Date(t0 + x * 86400000)),

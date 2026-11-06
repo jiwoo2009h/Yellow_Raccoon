@@ -69,7 +69,7 @@ export async function scanResultView({ id }) {
       h('div', { class: 'big-volume' }, fmt(s.volume, cm ? 1 : 0), h('small', null, volumeUnit(unit))),
       h('p', { class: 'status-body', style: { marginTop: '4px' } }, headline),
       d && d.volume_pct_per_day !== null && d.volume_pct_per_day !== undefined
-        ? h('p', { class: 'caption', style: { margin: '6px 0 0' } }, `부피 생장률 ${signed(d.volume_pct_per_day)}%/일`, s.since_first ? ` · 첫 측정 대비 ${signed(s.since_first.volume_pct, 0)}% (${daysText(s.since_first.days)})` : '')
+        ? h('p', { class: 'caption', style: { margin: '6px 0 0' } }, `하루 평균 부피 생장률 ${signed(d.volume_pct_per_day)}%`, s.since_first ? ` · 첫 측정 대비 ${signed(s.since_first.volume_pct, 0)}% (${daysText(s.since_first.days)})` : '')
         : null,
       !cm ? h('a', { class: 'notice accent', href: `#/plant/${s.plant_id}/calibrate`, style: { marginTop: '12px' } },
         h('span', { html: icons.ruler, style: { display: 'contents' } }),

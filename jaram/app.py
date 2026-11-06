@@ -296,7 +296,7 @@ def create_app(data_dir=None, password=None):
             "SELECT * FROM care_logs WHERE plant_id = ? ORDER BY at, id", (plant["id"],)))
         unit = "cm" if plant["cm_per_px"] else "px"
         result = evaluate(series, env, care, species_cfg(th, plant["species"]), th["general"],
-                          datetime.now(), unit)
+                          datetime.now(), unit, scans=load_scans(plant))
         return series, env, care, result
 
     def m_json(e, env_by_m):
@@ -743,6 +743,10 @@ def create_app(data_dir=None, password=None):
         gen["rate_window"] = max(1, min(10, gen["rate_window"]))
         gen["env_lookback"] = max(1, min(10, gen["env_lookback"]))
         gen["persist_count"] = max(1, min(gen["env_lookback"], gen["persist_count"]))
+        gen["scan_max_age_days"] = max(1, min(60, gen["scan_max_age_days"]))
+        for cfg in merged["species"].values():
+            if not 0 < cfg["volume_slowdown_ratio"] < 100 or not 0 < cfg["slowdown_ratio"] < 100:
+                raise ApiError(f"{cfg['label']}: 생장 둔화 기준은 0%보다 크고 100%보다 작아야 해요.")
         db.set_setting(conn(), "thresholds", merged)
         conn().commit()
         return get_settings()

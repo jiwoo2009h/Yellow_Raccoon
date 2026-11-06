@@ -116,3 +116,28 @@ def test_scans_csv(client):
     client.post(f"/api/scans/{sid}/compute")
     lines = client.get("/api/export_scans.csv").data.decode("utf-8-sig").strip().splitlines()
     assert lines[0].startswith("날짜,식물ID") and len(lines) == 2
+
+
+def test_recent_scans_drive_recommendation(client):
+    from datetime import datetime, timedelta
+    pid = make_plant(client)
+    now = datetime.now().replace(microsecond=0)
+    for size, ago in ((0.3, 8), (0.5, 1)):
+        sid = full_scan(client, pid, size, (now - timedelta(days=ago)).isoformat(timespec="minutes"), top=False)
+        assert client.post(f"/api/scans/{sid}/compute").status_code == 200
+    plant = client.get(f"/api/plants/{pid}").get_json()
+    assert plant["facts"]["growth_source"] == "3d"
+    assert plant["facts"]["volume_rate"] > 0
+    assert any("3D 부피 생장률" in reason for rec in plant["recs"] for reason in rec["reasons"])
+
+
+def test_volume_threshold_validation(client):
+    th = client.get("/api/settings").get_json()["thresholds"]
+    th["species"]["basil"]["volume_slowdown_ratio"] = 120
+    r = client.put("/api/settings", json={"thresholds": th}, headers={"X-Requested-With": "jaram"})
+    assert r.status_code == 400
+    th["species"]["basil"]["volume_slowdown_ratio"] = 40
+    th["general"]["scan_max_age_days"] = 500
+    saved = client.put("/api/settings", json={"thresholds": th}, headers={"X-Requested-With": "jaram"}).get_json()
+    assert saved["thresholds"]["species"]["basil"]["volume_slowdown_ratio"] == 40
+    assert saved["thresholds"]["general"]["scan_max_age_days"] == 60

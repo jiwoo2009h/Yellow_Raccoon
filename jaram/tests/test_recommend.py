@@ -167,3 +167,104 @@ def test_photos_too_close_together_stay_pending():
     r = run(s)
     assert codes(r) == ["too_close"]
     assert r["status"] == "pending"
+
+
+# ---------------------------------------------------------------- 3D 부피 반영
+from growth import scan_series  # noqa: E402
+
+
+def scans_from(volumes, days):
+    rows = [{"id": i + 1, "taken_at": (START + timedelta(days=d)).isoformat(), "volume_px": v,
+             "height_px": 100, "width_px": 100, "depth_px": 100, "top_area_px": 1000}
+            for i, (v, d) in enumerate(zip(volumes, days))]
+    return scan_series(rows)
+
+
+def run3d(series, scans, env=(), care=(), species="basil", general=None):
+    return evaluate(series, list(env), list(care), SPECIES_DEFAULTS[species], general or GENERAL_DEFAULTS, NOW,
+                    scans=scans)
+
+
+def test_volume_growth_is_preferred_when_recent_scans_exist():
+    r = run3d(series_from(GROWING), scans_from([1000, 1800], [3, 10]))  # 부피 +80% / 7일 = 하루 약 8.8%씩
+    assert r["facts"]["growth_source"] == "3d"
+    assert abs(r["facts"]["volume_rate"] - (1.8 ** (1 / 7) - 1) * 100) < 1e-9
+    assert codes(r) == ["keep"]
+    keep = r["recs"][0]
+    assert "3D 부피" in keep["body"]
+    assert keep["reasons"][0].startswith("3D 부피 생장률")
+    assert any(x.startswith("정면 사진:") for x in keep["reasons"])
+
+
+def test_volume_stagnation_overrides_2d_growth_and_flags_mismatch():
+    # 정면 사진은 잘 자라지만 3D 부피는 7일 동안 +3.5% (0.5%/일 < 1.5%/일) -> 3D 우선 '둔화'
+    env = [env_at(11, soil=20)]
+    r = run3d(series_from(GROWING), scans_from([1000, 1035], [3, 10]), env=env)
+    assert r["facts"]["growth_down"] is True
+    assert r["facts"]["volume_stagnant"] is True
+    assert r["facts"]["growth_mismatch"] is True
+    assert "water_needed" in codes(r)
+    assert "growth_mismatch" in codes(r)
+    assert r["status"] == "care"
+    water = next(x for x in r["recs"] if x["code"] == "water_needed")
+    assert any("3D 부피 생장률" in x for x in water["reasons"])
+
+
+def test_volume_growth_keeps_low_soil_as_observation_even_if_2d_slows():
+    env = [env_at(11, soil=20)]
+    r = run3d(series_from(SLOWING), scans_from([1000, 1800], [3, 10]), env=env)
+    assert r["facts"]["growth_down"] is False
+    assert "water_needed" not in codes(r)
+    assert "soil_low_watch" in codes(r)
+    mismatch = next(x for x in r["recs"] if x["code"] == "growth_mismatch")
+    assert mismatch["level"] == "observe"
+    assert "3D 부피는 잘 늘고" in mismatch["body"]
+
+
+def test_volume_slowdown_against_previous_scan_interval():
+    # 1구간 1.6배/5일 = 하루 9.9%, 2구간 1.15배/5일 = 하루 2.8% (71% 감소 > 50%) -> 둔화
+    vols = [1000, 1600, 1840]
+    r = run3d(series_from(GROWING), scans_from(vols, [0, 5, 10]))
+    assert r["facts"]["volume_slowing"] is True
+    assert r["facts"]["volume_stagnant"] is False
+    assert "slowing" in codes(r)
+    rec = next(x for x in r["recs"] if x["code"] == "slowing")
+    assert any("그 전 3D 구간" in x for x in rec["reasons"])
+
+
+def test_old_or_single_scans_fall_back_to_2d():
+    old = scans_from([1000, 1035], [0, 3])  # 마지막 3D 측정이 9일 전 (기준 7일)
+    r = run3d(series_from(GROWING), old)
+    assert r["facts"]["growth_source"] == "2d"
+    assert codes(r) == ["keep"]
+    assert "높이와 투영 면적" in r["recs"][0]["body"]
+    longer = dict(GENERAL_DEFAULTS, scan_max_age_days=10)
+    assert run3d(series_from(GROWING), old, general=longer)["facts"]["growth_source"] == "3d"
+    single = run3d(series_from(GROWING), scans_from([1000], [10]))
+    assert single["facts"]["growth_source"] == "2d"
+
+
+def test_scan_rate_needs_half_day_gap():
+    s = scans_from([1000, 1300], [10, 10.2])
+    assert s[1]["delta"]["volume_pct"] == 30
+    assert s[1]["delta"]["volume_pct_per_day"] is None
+    r = run3d(series_from(GROWING), s)
+    assert r["facts"]["growth_source"] == "2d"
+
+
+def test_new_volume_thresholds_merge_into_old_settings():
+    stored = {"general": {"rate_window": 3}, "species": {"basil": {"stagnation_rate": 2}}}
+    merged = merge_thresholds(stored)
+    assert merged["general"]["scan_max_age_days"] == 7
+    assert merged["species"]["basil"]["volume_stagnation_rate"] == 1.5
+    assert merged["species"]["lettuce"]["volume_slowdown_ratio"] == 50
+
+
+def test_compound_volume_rate_does_not_flag_normal_young_growth():
+    from growth import compound_rate
+    assert abs(compound_rate(100, 200, 7) - (2 ** (1 / 7) - 1) * 100) < 1e-12
+    assert compound_rate(100, 200, 0.2) is None and compound_rate(0, 10, 7) is None
+    # 어린 식물: 1주차 4.8배, 2주차 2.8배. 단순 %/일로는 52% 둔화지만 하루 복리 생장률로는 약 37% 둔화(정상)
+    r = run3d(series_from(GROWING), scans_from([100, 481, 1361], [-4, 3, 10]))
+    assert r["facts"]["volume_slowing"] is False
+    assert codes(r) == ["keep"]

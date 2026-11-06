@@ -16,6 +16,9 @@ GENERAL_DEFAULTS = {
     "env_lookback": 3,
     # 그중 몇 번 이상 기준을 벗어나야 '지속적으로 벗어남'으로 볼지
     "persist_count": 2,
+    # 이보다 오래된 3D 측정은 추천 판단에 쓰지 않습니다(일).
+    # 최근 3D 측정이 2번 이상 있으면 부피 생장률을 생장 판단의 우선 근거로 씁니다.
+    "scan_max_age_days": 7,
 }
 
 # 종류별 기준. 단위: 온도 ℃, 습도 %, 토양 수분 %, 조도 lux
@@ -39,6 +42,11 @@ SPECIES_DEFAULTS = {
         "water_interval_days": 3,
         # 잎 평균 색상(Hue)이 처음 기록보다 이만큼 낮아지면(노란 쪽) 알림
         "hue_drop": 6,
+        # 3D 부피 생장률(%/일)이 이 값보다 낮으면 '정체'.
+        # 모양이 비슷하게 커지면 부피 변화율은 면적 변화율의 약 1.5배라서 면적 기준(1.0)의 1.5배로 둡니다.
+        "volume_stagnation_rate": 1.5,
+        # 최근 3D 구간의 부피 생장률이 그 전 구간보다 이 비율(%) 이상 줄면 '생장 둔화'
+        "volume_slowdown_ratio": 50,
         # 식물 영역을 찾는 HSV 범위 (OpenCV 기준: H 0~179, S/V 0~255)
         "hsv_lower": [30, 40, 35],
         "hsv_upper": [90, 255, 255],
@@ -57,6 +65,8 @@ SPECIES_DEFAULTS = {
         "drop_alert": 15,
         "water_interval_days": 2,
         "hue_drop": 6,
+        "volume_stagnation_rate": 1.5,
+        "volume_slowdown_ratio": 50,
         # 상추는 바질보다 밝은 연두색이라 H 하한을 조금 낮춤
         "hsv_lower": [25, 35, 40],
         "hsv_upper": [90, 255, 255],
@@ -75,6 +85,8 @@ SPECIES_DEFAULTS = {
         "drop_alert": 15,
         "water_interval_days": 3,
         "hue_drop": 6,
+        "volume_stagnation_rate": 1.5,
+        "volume_slowdown_ratio": 50,
         "hsv_lower": [28, 35, 35],
         "hsv_upper": [90, 255, 255],
     },

@@ -72,7 +72,40 @@ def _persistent(values, predicate, count):
     return len(values) >= count and sum(1 for v in values if predicate(v)) >= count
 
 
-def evaluate(series, env_logs, care_logs, species, general, now, unit="px"):
+def volume_facts(scans, t, general, now):
+    """최근 3D 측정 두 번 이상으로 부피 생장률·둔화·정체를 판단합니다.
+
+    scans : growth.scan_series() 결과 (완료된 3D 측정, 시각 순)
+    반환값이 None 이면 3D 근거가 없어서 정면 사진(2D)만으로 판단합니다.
+    """
+    if not scans or len(scans) < 2:
+        return None
+    max_age = general.get("scan_max_age_days", 7)
+    last = scans[-1]
+    if days_between(last["taken_at"], now) > max_age:
+        return None
+    d = last.get("delta") or {}
+    rate = d.get("volume_pct_per_day")
+    if rate is None:
+        return None
+    prev_d = (scans[-2].get("delta") or {}) if len(scans) >= 3 else {}
+    prev = prev_d.get("volume_pct_per_day")
+    slowing = prev is not None and prev > 0 and rate < prev * (1 - t["volume_slowdown_ratio"] / 100)
+    stagnant = rate < t["volume_stagnation_rate"]
+    down = slowing or stagnant
+    reasons = [f"3D 부피 생장률 하루 평균 {_signed(rate)}% (최근 3D 측정 {_n(d['days'])}일 간격, 부피 {_signed(d['volume_pct'])}%)"]
+    if slowing:
+        reasons.append(f"그 전 3D 구간(하루 {_signed(prev)}%)보다 {_n((1 - rate / prev) * 100, 0)}% 느려졌어요")
+    elif stagnant:
+        reasons.append(f"부피 정체 기준(하루 {_n(t['volume_stagnation_rate'])}%)보다 낮아요")
+    return {
+        "rate": rate, "prev": prev, "slowing": slowing, "stagnant": stagnant,
+        "down": down, "growing": not down and rate > 0, "days": d["days"],
+        "age_days": days_between(last["taken_at"], now), "reasons": reasons,
+    }
+
+
+def evaluate(series, env_logs, care_logs, species, general, now, unit="px", scans=None):
     """식물 하나의 상태와 추천 목록을 계산합니다.
 
     series    : growth.with_units() 결과 (촬영 시각 순)
@@ -80,6 +113,7 @@ def evaluate(series, env_logs, care_logs, species, general, now, unit="px"):
     care_logs : [{at, kind, amount}, ...] (시각 순)
     species   : 종류별 기준값 (thresholds.SPECIES_DEFAULTS 형태)
     general   : 공통 기준값
+    scans     : growth.scan_series() 결과 (3D 측정). 최근 것이 2개 이상이면 생장 판단에 우선 사용
     """
     t = species
     window = general.get("rate_window", 2)
@@ -111,27 +145,41 @@ def evaluate(series, env_logs, care_logs, species, general, now, unit="px"):
 
     slowing = r is not None and p is not None and p > 0 and r < p * (1 - t["slowdown_ratio"] / 100)
     stagnant = r is not None and r < t["stagnation_rate"]
-    growth_down = slowing or stagnant
+    area_down = slowing or stagnant
     last_delta = series[-1]["delta"] or {}
     last_drop = last_delta.get("area_pct")
     sudden_drop = last_drop is not None and last_drop <= -t["drop_alert"]
     window_all_up = bool(recent) and all(
         (s["delta"] or {}).get("area", 0) > 0 for s in series[recent["start"] + 1: recent["end"] + 1]
     )
-    growing_well = (
-        r is not None and not growth_down and window_all_up and (h_rate is None or h_rate >= 0)
+    area_growing = (
+        r is not None and not area_down and window_all_up and (h_rate is None or h_rate >= 0)
     )
 
-    growth_reasons = []
+    area_reasons = []
     if r is not None:
-        growth_reasons.append(f"최근 {_n(recent['days'])}일 투영 면적 생장률 {_signed(r)}%/일")
+        area_reasons.append(f"최근 {_n(recent['days'])}일 투영 면적 생장률 {_signed(r)}%/일")
     if slowing:
         drop = (1 - r / p) * 100
-        growth_reasons.append(f"그 전 기간({_signed(p)}%/일)보다 {_n(drop, 0)}% 느려졌어요")
+        area_reasons.append(f"그 전 기간({_signed(p)}%/일)보다 {_n(drop, 0)}% 느려졌어요")
     elif stagnant:
-        growth_reasons.append(f"정체 기준({_n(t['stagnation_rate'])}%/일)보다 낮아요")
+        area_reasons.append(f"정체 기준({_n(t['stagnation_rate'])}%/일)보다 낮아요")
     if h_rate is not None:
-        growth_reasons.append(f"높이 변화 {_signed(h_rate, 2)}{unit}/일")
+        area_reasons.append(f"높이 변화 {_signed(h_rate, 2)}{unit}/일")
+
+    # 3D 측정이 최근에 2번 이상 있으면 부피 생장률을 우선 근거로, 정면 사진(2D)은 보조 근거로 씁니다.
+    vol = volume_facts(scans, t, general, now)
+    if vol:
+        growth_down = vol["down"]
+        growing_well = vol["growing"]
+        growth_reasons = vol["reasons"] + [f"정면 사진: {x}" for x in area_reasons[:1]]
+        # 두 판단이 확실히 엇갈릴 때만 (한쪽은 둔화·정체, 다른 쪽은 잘 자람)
+        mismatch = (vol["down"] and area_growing) or (vol["growing"] and area_down)
+    else:
+        growth_down = area_down
+        growing_well = area_growing
+        growth_reasons = area_reasons
+        mismatch = False
 
     facts.update({
         "area_rate": r,
@@ -141,6 +189,13 @@ def evaluate(series, env_logs, care_logs, species, general, now, unit="px"):
         "stagnant": stagnant,
         "growing_well": growing_well,
         "last_area_pct": last_drop,
+        "growth_source": "3d" if vol else "2d",
+        "volume_rate": vol["rate"] if vol else None,
+        "volume_rate_prev": vol["prev"] if vol else None,
+        "volume_slowing": vol["slowing"] if vol else None,
+        "volume_stagnant": vol["stagnant"] if vol else None,
+        "growth_down": growth_down,
+        "growth_mismatch": mismatch,
     })
 
     # ------------------------------------------------------------------
@@ -302,6 +357,18 @@ def evaluate(series, env_logs, care_logs, species, general, now, unit="px"):
             body += " 온도·습도·토양 수분·조도를 함께 기록하면 원인을 찾는 데 도움이 돼요."
         recs.append(_rec("slowing", "observe", "생장 속도가 줄었어요", body, growth_reasons))
 
+    # 규칙 J. 정면 사진(2D)과 3D 측정의 판단이 엇갈림 -> 3D를 우선하되 관찰
+    if mismatch:
+        if vol["growing"]:
+            body = ("3D 부피는 잘 늘고 있는데 정면 사진에서는 생장이 느려 보여요. 잎이 앞뒤로 자랐거나 "
+                    "정면 사진의 촬영 위치·거리가 바뀌었을 수 있어요. 생장 판단은 3D 결과를 우선했어요.")
+        else:
+            body = ("정면 사진에서는 잘 자라는데 3D 부피는 거의 늘지 않았어요. 측면 사진을 찍은 높이·거리가 "
+                    "지난번과 달랐을 수 있어요. 다음 3D 측정 때 같은 높이에서 찍어 확인해 주세요. "
+                    "생장 판단은 3D 결과를 우선했어요.")
+        recs.append(_rec("growth_mismatch", "observe", "정면 사진과 3D 측정 결과가 달라요", body,
+                         vol["reasons"] + [f"정면 사진: {x}" for x in area_reasons[:2]]))
+
     # 규칙 H. 잎 색 변화 (노란 쪽으로 Hue 감소)
     if n >= 3:
         base_hue = sum(s["hue"] for s in series[:3] if s.get("hue") is not None) / max(
@@ -320,8 +387,9 @@ def evaluate(series, env_logs, care_logs, species, general, now, unit="px"):
         reasons = list(growth_reasons)
         reasons.append("최근 환경 기록이 모두 기준 범위 안이에요" if has_env
                        else "환경 기록이 없어 생육 데이터만으로 판단했어요")
-        recs.append(_rec("keep", "good", "지금처럼 관리해 주세요",
-                         "높이와 투영 면적이 꾸준히 늘고 있어요. 현재 관리 환경을 유지하면 돼요.", reasons))
+        body = ("3D 부피가 꾸준히 늘고 있어요. 현재 관리 환경을 유지하면 돼요." if vol
+                else "높이와 투영 면적이 꾸준히 늘고 있어요. 현재 관리 환경을 유지하면 돼요.")
+        recs.append(_rec("keep", "good", "지금처럼 관리해 주세요", body, reasons))
 
     if not recs:
         if r is None:

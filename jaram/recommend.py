@@ -32,6 +32,30 @@ ACTION_LABELS = {
     "move": "위치 옮겼어요",
 }
 ENV_MAX_AGE_DAYS = 7  # 이보다 오래된 환경 기록은 판단에 쓰지 않습니다.
+WEEK_DAYS = 7  # '최근 일주일 수치 기반 추천'에 쓰는 기간
+
+# 식물 화면의 '오늘의 추천 행동' 문장 (추천 코드별)
+TODAY = {
+    "no_data": "오늘은 첫 사진을 찍어 기준 기록을 만드는 것을 추천합니다.",
+    "baseline": "오늘은 같은 위치·거리에서 사진을 한 번 더 찍는 것을 추천합니다.",
+    "sudden_drop": "오늘은 잎이 시들거나 상하지 않았는지 직접 확인하는 것을 추천합니다.",
+    "water_needed": "오늘은 흙 상태를 확인하고 물을 주는 것을 추천합니다.",
+    "water_done": "오늘은 물을 준 효과를 지켜보며 사진을 한 번 더 찍는 것을 추천합니다.",
+    "soil_low_watch": "오늘은 흙이 얼마나 말랐는지 손으로 만져 확인하는 것을 추천합니다.",
+    "overwater": "오늘은 물을 주지 말고 화분 배수 상태를 확인하는 것을 추천합니다.",
+    "light_low": "오늘은 식물을 더 밝은 곳으로 옮기거나 LED 조명 시간을 늘리는 것을 추천합니다.",
+    "light_done": "오늘은 빛 환경을 바꾼 효과를 지켜보는 것을 추천합니다.",
+    "light_low_watch": "오늘은 조도를 한 번 더 재 보는 것을 추천합니다.",
+    "env_check": "오늘은 챔버의 온도·습도를 권장 범위로 맞추는 것을 추천합니다.",
+    "env_watch": "오늘은 챔버의 온도·습도를 한 번 더 확인하는 것을 추천합니다.",
+    "water_interval": "오늘은 흙 표면을 만져 보고 말라 있으면 물을 주는 것을 추천합니다.",
+    "slowing": "오늘은 같은 위치·거리에서 사진을 찍어 생장 변화를 다시 확인하는 것을 추천합니다.",
+    "hue_drop": "오늘은 잎 색이 실제로 변했는지 직접 살펴보는 것을 추천합니다.",
+    "yellow_leaf": "오늘은 노랗게 변한 잎이 있는지 직접 살펴보는 것을 추천합니다.",
+    "keep": "오늘은 지금처럼 관리하는 것을 추천합니다.",
+    "too_close": "오늘은 같은 위치·거리에서 사진을 찍어 기록을 이어가는 것을 추천합니다.",
+    "fluctuating": "오늘은 같은 위치·거리에서 사진을 찍어 기록을 이어가는 것을 추천합니다.",
+}
 
 
 def _n(value, digits=1):
@@ -40,6 +64,14 @@ def _n(value, digits=1):
     if "." in text:
         text = text.rstrip("0").rstrip(".")
     return text
+
+
+def _josa(word, with_final, without_final):
+    """받침 유무에 맞는 조사: _josa('온도', '을', '를') -> '를'"""
+    ch = word.strip()[-1:]
+    if "가" <= ch <= "힣":
+        return with_final if (ord(ch) - 0xAC00) % 28 else without_final
+    return without_final
 
 
 def _signed(value, digits=1):
@@ -53,6 +85,7 @@ def _rec(code, level, title, body, reasons=None, action=None):
         "title": title,
         "body": body,
         "reasons": reasons or [],
+        "today": TODAY.get(code, ""),
         "action": {"kind": action, "label": ACTION_LABELS[action]} if action else None,
     }
 
@@ -82,6 +115,7 @@ def evaluate(series, env_logs, care_logs, species, general, now, unit="px"):
     general   : 공통 기준값
     """
     t = species
+    weekly = weekly_advice(env_logs, care_logs, species, now)
     window = general.get("rate_window", 2)
     lookback = general.get("env_lookback", 3)
     persist = general.get("persist_count", 2)
@@ -92,12 +126,12 @@ def evaluate(series, env_logs, care_logs, species, general, now, unit="px"):
     if n == 0:
         rec = _rec("no_data", "info", "첫 사진을 찍어 주세요",
                    "사진을 한 장 찍으면 그 사진을 기준으로 생장량을 비교하기 시작해요.")
-        return _result("pending", [rec], facts, summary)
+        return _result("pending", [rec], facts, summary, weekly)
     if n == 1:
         rec = _rec("baseline", "info", "기준 사진을 저장했어요",
                    "다음 촬영부터 이 사진과 비교해서 얼마나 자랐는지 알려드릴게요. "
                    "같은 위치·거리에서 찍으면 더 정확해요.")
-        return _result("pending", [rec], facts, summary)
+        return _result("pending", [rec], facts, summary, weekly)
 
     # ------------------------------------------------------------------
     # 1) 생육 데이터 확인
@@ -295,8 +329,25 @@ def evaluate(series, env_logs, care_logs, species, general, now, unit="px"):
                 action="water",
             ))
 
+    # 규칙 H-2. 노란 잎 비율 증가 (잎이 노랗게 변하면 초록 영역에서 빠지므로 따로 확인)
+    # 노랗게 변한 잎은 초록 면적에서 빠지므로, 이때의 생장 둔화는 '원인 불명'으로 보지 않습니다.
+    yellow_up = False
+    yellows = [s["yellow_ratio"] for s in series if s.get("yellow_ratio") is not None]
+    if len(yellows) >= 2:
+        base_y = min(yellows[:3])
+        latest_y = yellows[-1]
+        facts["yellow_ratio"] = latest_y
+        yellow_up = latest_y - base_y >= t.get("yellow_rise", 10)
+        if yellow_up:
+            recs.append(_rec(
+                "yellow_leaf", "observe", "잎 색 변화",
+                f"노란 잎 비율 {_n(latest_y)}% (초기 {_n(base_y)}%). 잎을 직접 살펴보세요. "
+                "조명 색이 달라도 이렇게 보일 수 있어요.",
+                [f"노란 잎 비율 {_n(base_y)}% → {_n(latest_y)}% (기준 +{_n(t.get('yellow_rise', 10))}%p 이상)"],
+            ))
+
     # 규칙 G. 생장 둔화의 원인을 환경 데이터로 설명할 수 없는 경우 -> 관찰
-    if growth_down and not env_explained and not sudden_drop:
+    if growth_down and not env_explained and not sudden_drop and not yellow_up:
         body = "아직 원인이 명확하지 않아요. 다음 촬영까지 지켜볼게요."
         if not has_env:
             body += " 온도·습도·토양 수분·조도를 함께 기록하면 원인을 찾는 데 도움이 돼요."
@@ -335,15 +386,90 @@ def evaluate(series, env_logs, care_logs, species, general, now, unit="px"):
     recs.sort(key=lambda x: -LEVEL_RANK[x["level"]])
     top = max(LEVEL_RANK[x["level"]] for x in recs)
     status = {3: "care", 2: "observe", 1: "good"}.get(top, "pending")
-    return _result(status, recs, facts, summary)
+    return _result(status, recs, facts, summary, weekly)
 
 
-def _result(status, recs, facts, summary):
+def _result(status, recs, facts, summary, weekly=None):
     return {
         "status": status,
         "status_label": STATUS_LABELS[status],
         "headline": recs[0]["title"] if recs else "",
+        "today": recs[0]["today"] if recs else "",
         "recs": recs,
         "facts": facts,
         "summary": summary,
+        "weekly": weekly or [],
     }
+
+
+# ----------------------------------------------------------------------
+# 최근 일주일 수치 기반 추천
+# ----------------------------------------------------------------------
+# key, 이름, 단위, 최솟값 키, 최댓값 키, 소수 자리
+WEEKLY_FIELDS = (
+    ("temp", "온도", "℃", "temp_min", "temp_max", 1),
+    ("humidity", "습도", "%", "humidity_min", "humidity_max", 0),
+    ("soil", "토양 수분", "%", "soil_min", "soil_max", 0),
+    ("lux", "조도", " lux", "lux_min", None, 0),
+    ("light_hours", "조명 시간", "시간", "light_hours_min", None, 1),
+)
+
+
+def weekly_advice(env_logs, care_logs, species, now):
+    """최근 7일 환경 기록의 평균을 기준 범위와 비교해 '무엇을 몇으로 맞추면 좋을지' 문장으로 만듭니다.
+
+    생장 데이터와 함께 보는 위의 규칙(evaluate)과 달리, 환경 수치만 보는 참고용 안내입니다.
+    """
+    t = species
+    now = parse_time(now)
+    since = now - timedelta(days=WEEK_DAYS)
+    env = [e for e in env_logs if since <= parse_time(e["at"]) <= now + timedelta(hours=1)]
+    out = []
+    for key, label, unit, lo_key, hi_key, digits in WEEKLY_FIELDS:
+        vals = [e[key] for e in env if e.get(key) is not None]
+        lo = t.get(lo_key)
+        hi = t.get(hi_key) if hi_key else None
+        if not vals or lo is None:
+            continue
+        avg = sum(vals) / len(vals)
+        item = {"key": key, "label": label, "unit": unit.strip(), "avg": avg, "min": min(vals),
+                "max": max(vals), "n": len(vals), "lo": lo, "hi": hi, "status": "ok", "target": None}
+        avg_text = f"최근 일주일 평균 {label} {_n(avg, digits)}{unit}"
+        if hi is not None:
+            target = (lo + hi) / 2
+            range_text = f"{_n(lo, digits)}~{_n(hi, digits)}{unit}"
+        else:
+            target = lo
+            range_text = f"{_n(lo, digits)}{unit} 이상"
+        if avg < lo:
+            item["status"] = "low"
+            item["target"] = target
+            if key == "soil":
+                item["text"] = f"{avg_text}로 낮아요. 물 주는 간격을 줄여 토양 수분을 {_n(target, 0)}% 정도로 맞춰 주시는 것을 추천합니다."
+            elif key == "light_hours":
+                item["text"] = f"{avg_text}으로 짧아요. 조명 시간을 하루 {_n(lo, 0)}시간 이상으로 늘려 주시는 것을 추천합니다."
+            elif key == "lux":
+                item["text"] = f"{avg_text}로 어두워요. 조도를 {_n(lo, 0)} lux 이상으로 높여 주시는 것을 추천합니다."
+            else:
+                item["text"] = f"{avg_text}로 낮아요. {label}{_josa(label, '을', '를')} {_n(target, 0)}{unit.strip()} 정도로 맞춰 주시는 것을 추천합니다."
+        elif hi is not None and avg > hi:
+            item["status"] = "high"
+            item["target"] = target
+            if key == "soil":
+                item["text"] = f"{avg_text}로 높아요. 물 주는 간격을 늘려 토양 수분을 {_n(target, 0)}% 정도로 맞춰 주시는 것을 추천합니다."
+            else:
+                item["text"] = f"{avg_text}로 높아요. {label}{_josa(label, '을', '를')} {_n(target, 0)}{unit.strip()} 정도로 맞춰 주시는 것을 추천합니다."
+        else:
+            item["text"] = f"{avg_text} · 권장 범위({range_text}) 안이에요. 지금 {label}{_josa(label, '을', '를')} 유지하는 것을 추천합니다."
+        out.append(item)
+
+    waters = [c for c in care_logs if c["kind"] == "water" and since <= parse_time(c["at"]) <= now + timedelta(hours=1)]
+    total = sum(c.get("amount") or 0 for c in waters)
+    w = {"key": "water", "label": "물주기", "unit": "mL", "n": len(waters), "total": total, "status": "ok"}
+    if waters:
+        w["text"] = f"최근 일주일 동안 물을 {len(waters)}번" + (f", 모두 {_n(total, 0)} mL 줬어요." if total else " 줬어요.")
+    else:
+        w["status"] = "none"
+        w["text"] = "최근 일주일 동안 물을 준 기록이 없어요. 흙 상태를 확인하고, 물을 줬다면 기록해 주세요."
+    out.append(w)
+    return out

@@ -16,6 +16,9 @@ GENERAL_DEFAULTS = {
     "env_lookback": 3,
     # 그중 몇 번 이상 기준을 벗어나야 '지속적으로 벗어남'으로 볼지
     "persist_count": 2,
+    # 파란 기준 스티커 한 변의 실제 길이(cm). 사진마다 이 스티커로 픽셀 -> cm 를 자동 환산합니다.
+    # 0 이면 스티커를 쓰지 않고 '크기 보정'(자) 값만 씁니다.
+    "sticker_cm": 2.0,
 }
 
 # 종류별 기준. 단위: 온도 ℃, 습도 %, 토양 수분 %, 조도 lux
@@ -29,6 +32,8 @@ SPECIES_DEFAULTS = {
         "soil_min": 30,
         "soil_max": 80,
         "lux_min": 8000,
+        # 하루 조명(LED) 시간 최솟값
+        "light_hours_min": 14,
         # 최근 생장률이 이전보다 이 비율(%) 이상 줄면 '생장 둔화'
         "slowdown_ratio": 50,
         # 투영 면적 생장률(%/일)이 이 값보다 낮으면 '정체'
@@ -39,6 +44,8 @@ SPECIES_DEFAULTS = {
         "water_interval_days": 3,
         # 잎 평균 색상(Hue)이 처음 기록보다 이만큼 낮아지면(노란 쪽) 알림
         "hue_drop": 6,
+        # 노란 잎 비율이 처음 기록보다 이 값(%p) 이상 늘면 알림
+        "yellow_rise": 10,
         # 식물 영역을 찾는 HSV 범위 (OpenCV 기준: H 0~179, S/V 0~255)
         "hsv_lower": [30, 40, 35],
         "hsv_upper": [90, 255, 255],
@@ -52,11 +59,14 @@ SPECIES_DEFAULTS = {
         "soil_min": 40,
         "soil_max": 85,
         "lux_min": 5000,
+        "light_hours_min": 12,
         "slowdown_ratio": 50,
         "stagnation_rate": 1.0,
         "drop_alert": 15,
         "water_interval_days": 2,
         "hue_drop": 6,
+        # 노란 잎 비율이 처음 기록보다 이 값(%p) 이상 늘면 알림
+        "yellow_rise": 10,
         # 상추는 바질보다 밝은 연두색이라 H 하한을 조금 낮춤
         "hsv_lower": [25, 35, 40],
         "hsv_upper": [90, 255, 255],
@@ -70,11 +80,14 @@ SPECIES_DEFAULTS = {
         "soil_min": 30,
         "soil_max": 85,
         "lux_min": 5000,
+        "light_hours_min": 12,
         "slowdown_ratio": 50,
         "stagnation_rate": 1.0,
         "drop_alert": 15,
         "water_interval_days": 3,
         "hue_drop": 6,
+        # 노란 잎 비율이 처음 기록보다 이 값(%p) 이상 늘면 알림
+        "yellow_rise": 10,
         "hsv_lower": [28, 35, 35],
         "hsv_upper": [90, 255, 255],
     },

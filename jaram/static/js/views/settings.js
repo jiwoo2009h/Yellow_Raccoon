@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { h, icons, topbar, segmented, field, numberInput, toast, confirmSheet, fmt, formValues, skeleton } from '../ui.js';
+import { h, icons, topbar, segmented, field, numberInput, toast, confirmSheet, fmt, formValues, skeleton, VARIETY } from '../ui.js';
 import { getTheme, setTheme } from '../theme.js';
 
 const row = ({ href, icon, title, meta, onClick, accent }) => h(href ? 'a' : 'button', {
@@ -26,10 +26,10 @@ export async function settingsView() {
     h('h2', { class: 'section-title' }, '추천 기준'),
     h('p', { class: 'caption', style: { margin: '-4px 4px 12px' } }, '실험에서 모은 데이터를 보고 숫자를 조정하세요. 바꾸면 모든 식물의 추천에 바로 반영돼요.'),
     h('div', { class: 'list' },
-      row({ href: '#/settings/species/basil', icon: 'leaf', accent: true, title: '바질', meta: desc(sp.basil) }),
+      row({ href: '#/settings/species/basil', icon: 'leaf', accent: true, title: '스위트 바질', meta: desc(sp.basil) }),
       row({ href: '#/settings/species/lettuce', icon: 'sprout', accent: true, title: '상추', meta: desc(sp.lettuce) }),
       row({ href: '#/settings/species/other', icon: 'sprout', title: '기타 식물', meta: desc(sp.other) }),
-      row({ href: '#/settings/general', icon: 'sliders', title: '공통 판단 기준', meta: `생장률 계산 간격 ${thresholds.general.rate_window}회 · 환경 지속 ${thresholds.general.persist_count}/${thresholds.general.env_lookback}회` })),
+      row({ href: '#/settings/general', icon: 'sliders', title: '공통 판단 기준 · 기준 스티커', meta: `생장률 계산 간격 ${thresholds.general.rate_window}회 · 환경 지속 ${thresholds.general.persist_count}/${thresholds.general.env_lookback}회 · 스티커 ${thresholds.general.sticker_cm ? fmt(thresholds.general.sticker_cm, 1) + 'cm' : '사용 안 함'}` })),
     h('h2', { class: 'section-title' }, '데이터'),
     h('div', { class: 'list' },
       h('a', { class: 'list-item', href: '/api/export.csv', download: '' },
@@ -58,12 +58,14 @@ const SECTIONS = [
     ['humidity', '습도', '%'],
     ['soil', '토양 수분', '%'],
     ['lux_min', '조도 최솟값', 'lux', '이보다 어두운 기록이 이어지면 빛 부족 가능성을 확인해요.'],
+    ['light_hours_min', '조명 시간 최솟값', '시간', '최근 일주일 평균 조명 시간이 이보다 짧으면 늘리라고 추천해요.'],
   ]],
   ['생장 판단', '사진으로 계산한 투영 면적의 변화로 생장 상태를 판단해요.', [
     ['slowdown_ratio', '생장 둔화 기준', '%', '최근 생장률이 이전보다 이만큼 줄면 "생장 둔화"'],
     ['stagnation_rate', '정체 기준', '%/일', '면적 생장률이 하루 이 값보다 낮으면 "정체"'],
     ['drop_alert', '급감 경고', '%', '한 번에 면적이 이만큼 줄면 시듦·촬영 오류를 확인하라고 알려요'],
     ['hue_drop', '잎 색 변화', 'Hue', '잎의 평균 색상이 처음보다 이만큼 노란 쪽으로 바뀌면 알려요'],
+    ['yellow_rise', '노란 잎 증가', '%p', '노란 잎 비율이 처음보다 이만큼 늘면 잎을 살펴보라고 알려요'],
     ['water_interval_days', '물주기 확인 간격', '일', '토양 수분 기록이 없을 때, 물 준 지 이만큼 지나면 확인을 권해요'],
   ]],
 ];
@@ -105,7 +107,7 @@ export async function speciesSettingsView({ key }) {
     onsubmit: async (e) => { e.preventDefault(); await save(); },
   },
   h('div', { class: 'page-head', style: { paddingTop: '8px' } }, h('div', null,
-    h('h1', { class: 'large-title' }, `${t.label} 기준`),
+    h('h1', { class: 'large-title' }, `${VARIETY[key] || t.label} 기준`),
     h('p', { class: 'subtitle' }, '관리 추천 알고리즘이 쓰는 임계값이에요.'))),
   SECTIONS.map(([title, desc, items]) => [
     h('h2', { class: 'section-title' }, title),
@@ -195,6 +197,10 @@ export async function generalSettingsView() {
     h('div', { style: { height: '18px' } }),
     field('"지속"으로 볼 횟수', numberInput({ name: 'persist_count', unit: '회', value: g.persist_count, step: 1, min: 1, max: 10 }),
       '그중 몇 번 이상 기준을 벗어나야 "계속 벗어남"으로 판단할지 정해요. 센서 값이 한 번 튀어서 잘못 추천하는 것을 막아요.')),
+  h('h2', { class: 'section-title' }, '파란 기준 스티커'),
+  h('section', { class: 'card' },
+    field('스티커 한 변의 길이', numberInput({ name: 'sticker_cm', unit: 'cm', value: g.sticker_cm, step: '0.1', min: 0, max: 20 }),
+      '식물 옆에 붙인 정사각형 파란 스티커의 실제 길이예요. 사진마다 스티커 크기로 픽셀을 cm로 바꿔서, 촬영 거리가 조금 달라져도 정확하게 잴 수 있어요. 0이면 스티커를 쓰지 않고 \'크기 보정(자)\' 값만 써요. 바꾼 뒤에는 \'모든 사진 다시 분석\'을 눌러 주세요.')),
   h('div', { class: 'cta' }, h('button', { class: 'btn btn-primary', type: 'submit' }, '저장하기')));
   screen.replaceChildren(topbar({ title: '' }), form);
 }
@@ -214,6 +220,7 @@ export async function algorithmView() {
     ['온도·습도가 범위 밖으로 지속  그리고  생장 증가량 감소', '환경 조건 확인 필요', 'care'],
     [`토양 수분 > ${both('soil_max', '%')} 가 지속  그리고  생장률 감소`, '과습 가능성 → 물 주는 간격 늘리기', 'care'],
     [`한 번에 투영 면적이 ${fmt(b.drop_alert, 0)}% 이상 감소`, '시듦 또는 촬영 오류 확인', 'observe'],
+    [`노란 잎 비율이 처음보다 ${fmt(b.yellow_rise, 0)}%p 이상 증가`, '잎 색 변화 → 잎 직접 살펴보기', 'observe'],
     ['생장률이 감소했지만 환경으로 설명되지 않음', '원인 불명 → 관찰', 'observe'],
     ['환경 조건이 안정적  그리고  높이·면적이 계속 증가', '현재 관리 환경 유지', 'good'],
   ];

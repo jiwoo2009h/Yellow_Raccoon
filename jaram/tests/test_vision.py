@@ -66,3 +66,27 @@ def test_load_image_roundtrip():
     img = draw_plant(0.3, "basil", seed=6)
     loaded = load_image(jpeg(img))
     assert loaded.shape == img.shape
+
+
+def test_blue_sticker_sets_scale_per_photo():
+    # 합성 사진의 스티커: 2cm = 80px -> 40px/cm
+    res = PlantAnalyzer(sticker_cm=2.0).analyze(draw_plant(0.4, "basil", seed=3, sticker=True))
+    assert res.ref is not None
+    assert abs(res.ref["px_per_cm"] - 40) < 2
+    # 스티커는 식물 영역에 들어가지 않습니다
+    x, y, w, h = res.bbox
+    rx, ry, _, _ = res.ref["bbox"]
+    assert not (x <= rx <= x + w and y <= ry <= y + h)
+
+
+def test_no_sticker_or_disabled_gives_no_scale():
+    assert PlantAnalyzer(sticker_cm=2.0).analyze(draw_plant(0.4, "basil", seed=3)).ref is None
+    assert PlantAnalyzer().analyze(draw_plant(0.4, "basil", seed=3, sticker=True)).ref is None
+
+
+def test_yellow_leaf_ratio_and_exg():
+    green = PlantAnalyzer((25, 35, 40), (90, 255, 255)).analyze(draw_plant(0.6, "lettuce", seed=4))
+    yellow = PlantAnalyzer((25, 35, 40), (90, 255, 255)).analyze(draw_plant(0.6, "lettuce", seed=4, yellow=0.5))
+    assert green.yellow_ratio < 2
+    assert yellow.yellow_ratio > 10
+    assert green.exg > 0.1

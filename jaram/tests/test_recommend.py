@@ -167,3 +167,51 @@ def test_photos_too_close_together_stay_pending():
     r = run(s)
     assert codes(r) == ["too_close"]
     assert r["status"] == "pending"
+
+
+def test_today_sentence_and_weekly_advice():
+    env = [env_at(10, temp=33, humidity=55, soil=50, lux=12000, light_hours=10),
+           env_at(11, temp=32, humidity=55, soil=50, lux=12000, light_hours=10)]
+    care = [{"at": (START + timedelta(days=11)).isoformat(), "kind": "water", "amount": 150}]
+    res = run(series_from(GROWING), env, care)
+    assert res["today"].startswith("오늘은") and res["today"].endswith("추천합니다.")
+    weekly = {w["key"]: w for w in res["weekly"]}
+    assert weekly["temp"]["status"] == "high"
+    assert weekly["temp"]["target"] == 24  # 바질 18~30℃ 의 가운데
+    assert "온도를 24℃ 정도로 맞춰 주시는 것을 추천합니다" in weekly["temp"]["text"]
+    assert weekly["humidity"]["status"] == "ok"
+    assert "습도를 유지하는 것을 추천합니다" in weekly["humidity"]["text"]
+    assert weekly["light_hours"]["status"] == "low"
+    assert weekly["water"]["n"] == 1 and weekly["water"]["total"] == 150
+
+
+def test_weekly_advice_ignores_old_env_and_reports_no_water():
+    res = run(series_from(GROWING), [env_at(1, temp=40)])
+    keys = [w["key"] for w in res["weekly"]]
+    assert "temp" not in keys
+    assert res["weekly"][-1]["status"] == "none"
+
+
+def test_yellow_leaf_rise_is_observed_and_explains_slowing():
+    s = series_from(SLOWING)
+    for i, e in enumerate(s):
+        e["yellow_ratio"] = 0.5 if i < 4 else 18.0
+    res = run(s)
+    assert "yellow_leaf" in codes(res)
+    assert "slowing" not in codes(res)
+    assert res["status"] == "observe"
+
+
+def test_sticker_scale_is_used_per_photo():
+    ms = [
+        {"id": 1, "taken_at": START.isoformat(), "height_px": 400, "width_px": 200, "area_px": 40000, "ref_cm_per_px": 0.025},
+        {"id": 2, "taken_at": (START + timedelta(days=2)).isoformat(), "height_px": 500, "width_px": 250, "area_px": 50000, "ref_cm_per_px": 0.02},
+        {"id": 3, "taken_at": (START + timedelta(days=4)).isoformat(), "height_px": 480, "width_px": 240, "area_px": 48000},
+    ]
+    s = with_units(ms)
+    assert abs(s[0]["height"] - 10) < 1e-9
+    assert abs(s[1]["height"] - 10) < 1e-9  # 더 가까이서 찍어도 같은 실제 크기
+    # 스티커가 없는 사진은 다른 사진들의 환산값 중앙값(0.0225) 사용
+    assert abs(s[2]["height"] - 480 * 0.0225) < 1e-9
+    # 자 보정값이 있으면 스티커 없는 사진에 그 값을 사용
+    assert abs(with_units(ms, 0.03)[2]["height"] - 480 * 0.03) < 1e-9

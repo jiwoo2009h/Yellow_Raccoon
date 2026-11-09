@@ -1,96 +1,126 @@
+// 홈 = 식물 생육 대시보드
+// 1) 사이트 이름·소개  2) 품종(바질·상추)별 식물 목록 + 품종별 '추가' 버튼  3) 사진 찍기 바로가기  4) 최근 관리 기록
+
 import { api } from '../api.js';
-import { h, icons, statusBadge, relDays, isToday, skeleton, signed, dateLong } from '../ui.js';
+import {
+  h, icons, statusBadge, skeleton, fmt, signed, recBox, withIcon, VARIETY_ORDER, variety, plantTitle,
+  dateTimeShort, WEEKDAYS,
+} from '../ui.js';
 
-const LEVEL_ORDER = { care: 3, observe: 2, good: 1, pending: 0, info: 0 };
+export const CARE_ICON = { water: 'drop', move: 'move', light: 'bulb', vent: 'wind', fertilize: 'flask', prune: 'scissors', other: 'note' };
 
-function ring(done, total) {
-  const r = 24;
-  const c = 2 * Math.PI * r;
-  const ratio = total ? done / total : 0;
-  const svg = `<svg class="ring" viewBox="0 0 56 56" aria-hidden="true">
-    <circle cx="28" cy="28" r="${r}" fill="none" stroke="var(--surface-2)" stroke-width="6"/>
-    <circle cx="28" cy="28" r="${r}" fill="none" stroke="var(--accent)" stroke-width="6" stroke-linecap="round"
-      stroke-dasharray="${c}" stroke-dashoffset="${c * (1 - ratio)}" transform="rotate(-90 28 28)"/>
-    <text x="28" y="33" text-anchor="middle" font-size="14" font-weight="700" fill="var(--text-1)">${done}/${total}</text>
-  </svg>`;
-  return h('span', { html: svg, style: { display: 'contents' } });
+function headerDate() {
+  const d = new Date();
+  return `${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getDate()).padStart(2, '0')} ${WEEKDAYS[d.getDay()]}`;
 }
 
-function plantRow(p) {
-  const latest = p.latest;
-  const d = latest?.delta;
-  let line;
-  if (!latest) line = h('div', { class: 'desc' }, '아직 사진이 없어요 · 첫 사진을 찍어 주세요');
-  else if (!d || d.area_pct === null || d.area_pct === undefined) line = h('div', { class: 'desc' }, `${relDays(latest.taken_at)} 촬영 · 기준 사진`);
-  else {
-    const cls = d.area_pct > 0.05 ? 'up' : d.area_pct < -0.05 ? 'down' : 'flat';
-    line = h('div', { class: 'desc' },
-      h('span', { class: `delta ${cls}` }, `면적 ${signed(d.area_pct)}%`), ` · ${relDays(latest.taken_at)}`);
-  }
-  return h('a', { class: 'list-item', href: `#/plant/${p.id}` },
-    h('div', { class: 'thumb' }, latest
-      ? h('img', { src: latest.photo_url, alt: '', loading: 'lazy' })
-      : h('span', { html: icons.sprout, style: { display: 'contents' } })),
+function summaryCard(plants) {
+  const n = { good: 0, observe: 0, care: 0 };
+  plants.forEach((p) => { if (n[p.status] !== undefined) n[p.status] += 1; });
+  let headline;
+  if (!plants.length) headline = '식물을 등록하고 첫 사진을 찍어 보세요';
+  else if (n.care) headline = `${plants.length}개 중 ${n.care}개가 관리 필요해요`;
+  else if (n.observe) headline = `${plants.length}개 중 ${n.observe}개를 지켜봐 주세요`;
+  else if (n.good === plants.length) headline = '모두 잘 자라고 있어요';
+  else headline = '사진이 쌓이면 상태를 알려 드릴게요';
+  const count = (label, color, v) => h('div', { class: 'count' },
+    h('div', { class: 'label' }, h('i', { style: { background: color } }), label),
+    h('div', { class: 'v num' }, String(v)));
+  return h('section', { class: 'summary', 'aria-label': '오늘 확인할 식물' },
+    h('div', { class: 'k' }, '오늘 확인할 식물'),
+    h('div', { class: 'headline' }, headline),
+    h('div', { class: 'counts' },
+      count('정상', '#4ade80', n.good),
+      count('관찰', '#fbbf24', n.observe),
+      count('관리', '#f87171', n.care)));
+}
+
+function metric(label, value, unit, delta, deltaDigits = 1) {
+  return h('div', null,
+    h('div', { class: 'k' }, label),
+    h('div', { class: 'v' }, value, unit ? h('small', null, unit) : null,
+      delta !== undefined && delta !== null
+        ? h('small', { class: delta > 0 ? 'up' : delta < 0 ? 'down' : 'flat' }, signed(delta, deltaDigits)) : null));
+}
+
+export function plantCard(p) {
+  const l = p.latest;
+  const unit = p.unit === 'cm' ? 'cm' : 'px';
+  const areaUnit = p.unit === 'cm' ? 'cm²' : 'px';
+  const rate = p.facts?.area_rate;
+  const meta = l
+    ? `측정 ${p.count}회 · ${new Date(l.taken_at).getMonth() + 1}월 ${new Date(l.taken_at).getDate()}일 촬영`
+    : '아직 사진이 없어요';
+  return h('a', { class: 'plant-card', href: `#/plant/${p.id}` },
+    h('div', { class: 'pc-head' },
+      h('div', { class: 'pc-thumb' }, l
+        ? h('img', { src: l.photo_url, alt: '', loading: 'lazy' })
+        : h('span', { html: icons.leaf, style: { display: 'contents' } })),
+      h('div', { class: 'grow' },
+        h('div', { class: 'pc-name' }, plantTitle(p)),
+        h('div', { class: 'pc-meta' }, meta)),
+      statusBadge(p.status, p.status_label)),
+    l ? h('div', { class: 'pc-metrics' },
+      metric('높이', fmt(l.height, 1), unit, l.delta?.height),
+      metric('투영 면적', fmt(l.area, l.area >= 100 ? 0 : 1), areaUnit, l.delta?.area, 0),
+      h('div', null,
+        h('div', { class: 'k' }, '생장률'),
+        // 생장 둔화·정체로 판단되면 빨간색
+        h('div', { class: 'v' + (rate === null || rate === undefined ? '' : (p.facts.slowing || p.facts.stagnant || rate < 0) ? ' down' : ' up') },
+          rate === null || rate === undefined ? '–' : `${signed(rate, 1)}%`, h('small', { class: 'flat' }, '/일')))) : null,
+    recBox(p.recs?.[0]));
+}
+
+export function careRow(c, { showPlant = true, onDelete } = {}) {
+  const what = `${c.kind_label}${c.amount ? ` ${fmt(c.amount, 0)} mL` : ''}${c.note ? ` (${c.note})` : ''}`;
+  return h('div', { class: 'care-row' },
+    h('div', { class: 'list-icon accent', html: icons[CARE_ICON[c.kind] || 'note'] }),
     h('div', { class: 'grow' },
-      h('div', { class: 'title', style: { display: 'flex', alignItems: 'center', gap: '6px' } },
-        h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, p.name),
-        p.code ? h('span', { class: 'tag' }, p.code) : null),
-      line),
-    statusBadge(p.status, p.status_label));
+      h('div', { class: 't' }, showPlant ? `${c.plant_name} · ${what}` : what),
+      h('div', { class: 's' }, dateTimeShort(c.at))),
+    c.rec_code ? h('span', { class: 'tag' }, '추천 반영') : null,
+    onDelete ? h('button', { class: 'icon-btn del', type: 'button', 'aria-label': '기록 지우기', html: icons.trash, onclick: onDelete }) : null);
 }
 
 export async function homeView() {
   const screen = document.getElementById('screen');
-  const head = h('div', { class: 'page-head' },
+  const head = h('header', { class: 'page-head' },
     h('div', null,
-      h('h1', { class: 'large-title' }, '자람'),
-      h('p', { class: 'subtitle' }, dateLong(new Date()))),
-    h('a', { class: 'icon-btn', href: '#/plant/new', 'aria-label': '식물 추가', html: icons.plus }));
-  screen.append(head, skeleton(96, 16), skeleton(220, 32));
+      h('p', { class: 'eyebrow' }, '자람 · 바티칸 시국 과학과제연구'),
+      h('h1', { class: 'large-title' }, '식물 생육 대시보드'),
+      h('p', { class: 'intro' }, '바질·상추 사진을 OpenCV로 분석해 생장을 기록하고, 온습도·물주기 기록과 함께 오늘 할 관리를 추천해요.')),
+    h('span', { class: 'date-pill' }, ...withIcon('clock', headerDate())));
+  screen.append(head, skeleton(150, 16), skeleton(50), skeleton(250, 24));
 
-  const { plants } = await api.plants();
-  screen.replaceChildren(head);
+  const [{ plants }, care] = await Promise.all([api.plants(), api.careList(3).catch(() => ({ items: [] }))]);
 
-  if (!plants.length) {
-    screen.append(h('div', { class: 'empty' },
-      h('div', { class: 'art', html: icons.sprout }),
-      h('h2', null, '첫 식물을 등록해 보세요'),
-      h('p', null, '바질, 상추처럼 키우는 식물을 등록하고 사진을 찍으면 얼마나 자랐는지 비교해 드려요.'),
-      h('a', { class: 'btn btn-primary', href: '#/plant/new' }, h('span', { html: icons.plus, style: { display: 'contents' } }), '식물 등록하기')));
-    return;
-  }
+  const groups = VARIETY_ORDER
+    .filter((sp) => sp !== 'other' || plants.some((p) => p.species === 'other'))
+    .map((sp) => {
+      const list = plants.filter((p) => p.species === sp);
+      return h('section', { 'aria-label': variety(sp) },
+        h('div', { class: 'group-head' },
+          h('span', { html: icons.leaf, style: { display: 'contents' } }),
+          h('span', { class: 'variety' }, variety(sp)),
+          h('span', { class: 'count' }, `${list.length}개`),
+          h('span', { class: 'spacer' }),
+          h('a', { class: 'btn-add ghost', href: `#/plant/new?species=${sp}`, 'aria-label': `${variety(sp)} 추가` }, ...withIcon('plus', '추가'))),
+        list.length
+          ? list.map(plantCard)
+          : h('a', { class: 'plant-card empty-inline', href: `#/plant/new?species=${sp}` }, `아직 등록한 ${variety(sp)}가 없어요 · 눌러서 추가하기`));
+    });
 
-  // 오늘 촬영 현황
-  const doneToday = plants.filter((p) => p.latest && isToday(p.latest.taken_at)).length;
-  const care = plants.filter((p) => p.status === 'care').length;
-  const observe = plants.filter((p) => p.status === 'observe').length;
-  const left = plants.length - doneToday;
-  const sub = [];
-  if (care) sub.push(`관리가 필요한 식물 ${care}개`);
-  if (observe) sub.push(`지켜볼 식물 ${observe}개`);
-  screen.append(h('section', { class: 'card summary-card', 'aria-label': '오늘 촬영 현황' },
-    ring(doneToday, plants.length),
-    h('div', null,
-      h('div', { class: 'big' }, left > 0 ? `오늘 ${left}개 식물을 더 찍으면 돼요` : '오늘 기록을 모두 마쳤어요'),
-      h('div', { class: 'caption', style: { marginTop: '2px', fontSize: '14px' } }, sub.length ? sub.join(' · ') : '모든 식물이 잘 자라고 있어요'))));
-
-  // 내 식물
-  screen.append(h('h2', { class: 'section-title' }, '내 식물', h('small', null, `${plants.length}개`)));
-  screen.append(h('div', { class: 'list' }, plants.map(plantRow)));
-
-  // 추천 모아 보기
-  const recs = plants
-    .flatMap((p) => p.recs.filter((r) => r.level === 'care' || r.level === 'observe').map((r) => ({ p, r })))
-    .sort((a, b) => LEVEL_ORDER[b.r.level] - LEVEL_ORDER[a.r.level]);
-  if (recs.length) {
-    screen.append(h('h2', { class: 'section-title' }, '해야 할 일'));
-    screen.append(h('div', { class: 'list' }, recs.slice(0, 5).map(({ p, r }) =>
-      h('a', { class: 'list-item', href: `#/plant/${p.id}` },
-        h('div', { class: 'list-icon', style: r.level === 'care' ? { background: 'var(--care-bg)', color: 'var(--care-text)' } : { background: 'var(--observe-bg)', color: 'var(--observe-text)' },
-          html: r.action?.kind === 'water' ? icons.drop : r.action?.kind === 'light' ? icons.sun : r.level === 'care' ? icons.warn : icons.eye }),
-        h('div', { class: 'grow' },
-          h('div', { class: 'title' }, r.title),
-          h('div', { class: 'meta' }, `${p.name} · ${r.level === 'care' ? '관리 필요' : '관찰 필요'}`)),
-        h('span', { class: 'chev', html: icons.chevron, style: { display: 'contents' } })))));
-  }
+  const careItems = care.items || [];
+  screen.replaceChildren(
+    head,
+    h('div', { style: { marginTop: '16px' } }, summaryCard(plants)),
+    h('a', { class: 'btn btn-primary', href: '#/photo', style: { marginTop: '16px' } }, ...withIcon('camera', '오늘 사진 찍고 분석하기')),
+    h('h2', { class: 'section-title' }, '식물별 상태',
+      h('a', { class: 'btn-add', href: '#/plant/new' }, ...withIcon('plus', '식물 추가'))),
+    ...groups,
+    h('h2', { class: 'section-title' }, '최근 관리 기록', h('a', { class: 'section-link', href: '#/record?tab=care' }, '전체 보기')),
+    h('section', { class: 'card list-card' },
+      careItems.length ? careItems.map((c) => careRow(c))
+        : h('div', { class: 'empty-inline' }, '아직 관리 기록이 없어요. 기록 탭에서 물주기·위치 변경 등을 남겨 보세요.')),
+    h('p', { class: 'disclaimer' }, '추천은 진단이 아니라 관리 결정을 돕는 참고 정보입니다. 기준값은 설정에서 바꿀 수 있어요.'));
 }

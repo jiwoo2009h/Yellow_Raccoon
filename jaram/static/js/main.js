@@ -4,26 +4,38 @@ import { h, icons, toast } from './ui.js';
 import { applyTheme } from './theme.js';
 import { homeView } from './views/home.js';
 import { plantView } from './views/plant.js';
-import { captureView, pickPlantAndCapture } from './views/capture.js';
-import { resultView } from './views/result.js';
+import { photoView } from './views/photo.js';
+import { recordView } from './views/record.js';
+import { graphView } from './views/graph.js';
 import { plantFormView } from './views/plantForm.js';
 import { calibrateView } from './views/calibrate.js';
-import { reportView } from './views/report.js';
 import { settingsView, speciesSettingsView, generalSettingsView, algorithmView } from './views/settings.js';
 
+// [경로, 화면, 하단 탭에서 켜질 메뉴]
 const routes = [
   ['/', homeView, 'home'],
-  ['/report', reportView, 'report'],
+  ['/photo', photoView, 'photo'],
+  ['/record', recordView, 'record'],
+  ['/graph', graphView, 'graph'],
   ['/settings', settingsView, 'settings'],
   ['/settings/species/:key', speciesSettingsView],
   ['/settings/general', generalSettingsView],
   ['/settings/algorithm', algorithmView],
   ['/plant/new', plantFormView],
-  ['/plant/:id', plantView],
+  ['/plant/:id', plantView, 'home'],
   ['/plant/:id/edit', plantFormView],
-  ['/plant/:id/capture', captureView],
   ['/plant/:id/calibrate', calibrateView],
-  ['/m/:id', resultView],
+  // 예전 주소 호환
+  ['/report', graphView, 'graph'],
+  ['/m/:m', photoView, 'photo'],
+];
+
+const TABS = [
+  ['home', '#/', '홈', 'home'],
+  ['photo', '#/photo', '사진', 'camera'],
+  ['record', '#/record', '기록', 'clipboard'],
+  ['graph', '#/graph', '그래프', 'graph'],
+  ['settings', '#/settings', '설정', 'sliders'],
 ];
 
 function match(path) {
@@ -41,22 +53,15 @@ const tabbar = document.getElementById('tabbar');
 let cleanup = null;
 
 function renderTabbar(active) {
-  const tab = (key, href, label, ic) => h('a', {
+  tabbar.replaceChildren(...TABS.map(([key, href, label, ic]) => h('a', {
     class: 'tab', href, 'aria-current': active === key ? 'page' : null,
-  }, h('span', { html: icons[ic], style: { display: 'contents' } }), label);
-  tabbar.replaceChildren(
-    tab('home', '#/', '홈', 'home'),
-    h('button', { class: 'tab tab-capture', type: 'button', onclick: () => pickPlantAndCapture() },
-      h('span', { class: 'bubble', html: icons.camera }), '촬영'),
-    tab('report', '#/report', '리포트', 'chart'),
-    tab('settings', '#/settings', '설정', 'settings'),
-  );
+  }, h('span', { class: 'pill', html: icons[ic] }), label)));
   tabbar.hidden = !active;
 }
 
 async function router() {
-  const path = (location.hash.slice(1) || '/').split('?')[0];
-  const found = match(path) || match('/');
+  const [path, qs] = (location.hash.slice(1) || '/').split('?');
+  const found = match(path || '/') || match('/');
   if (typeof cleanup === 'function') {
     try { cleanup(); } catch { /* 이전 화면 정리 실패는 무시 */ }
   }
@@ -67,7 +72,8 @@ async function router() {
   screen.replaceChildren();
   window.scrollTo(0, 0);
   try {
-    const result = await found.view(found.params, { screen });
+    const query = Object.fromEntries(new URLSearchParams(qs || ''));
+    const result = await found.view({ ...query, ...found.params }, { screen });
     if (result && typeof result === 'object') {
       if (result.cleanup) cleanup = result.cleanup;
       if (result.className) screen.className = 'screen ' + result.className;

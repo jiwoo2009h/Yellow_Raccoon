@@ -19,7 +19,7 @@ from pathlib import Path
 from flask import Flask, Response, g, jsonify, request, send_from_directory
 
 import db
-from growth import parse_time, with_units
+from growth import parse_time, scale_for, with_units
 from recommend import evaluate
 from thresholds import SPECIES_KEYS, default_thresholds, merge_thresholds
 from vision import PlantAnalyzer, PlantNotFoundError, encode_jpeg, encode_png, load_image
@@ -28,7 +28,8 @@ BASE_DIR = Path(__file__).resolve().parent
 CARE_KINDS = {
     "water": "물주기",
     "move": "위치 변경",
-    "light": "조명 조정",
+    "light": "조명 변경",
+    "vent": "환기",
     "fertilize": "비료",
     "prune": "가지치기",
     "other": "기타",
@@ -38,7 +39,11 @@ ENV_FIELDS = {
     "humidity": (0, 100),
     "soil": (0, 100),
     "lux": (0, 200000),
+    "light_hours": (0, 24),
 }
+ENV_LABELS = {"temp": "온도", "humidity": "습도", "soil": "토양 수분", "lux": "조도", "light_hours": "조명 시간"}
+# 같은 챔버를 쓰는 식물끼리 함께 기록하는 값 (토양 수분은 화분마다 달라서 제외)
+CHAMBER_FIELDS = ("temp", "humidity", "lux", "light_hours")
 
 
 class ApiError(Exception):
@@ -170,6 +175,13 @@ def create_app(data_dir=None):
     def species_cfg(th, species):
         return th["species"].get(species) or th["species"]["other"]
 
+    def analyzer_for(th, species):
+        cfg = species_cfg(th, species)
+        return PlantAnalyzer(cfg["hsv_lower"], cfg["hsv_upper"], th["general"].get("sticker_cm"))
+
+    def unit_of(plant, ms):
+        return "cm" if scale_for(ms, plant["cm_per_px"]) else "px"
+
     def media_url(name):
         return f"/media/{name}" if name else None
 
@@ -196,7 +208,7 @@ def create_app(data_dir=None):
             "SELECT * FROM env_logs WHERE plant_id = ? ORDER BY at, id", (plant["id"],)))
         care = db.rows(conn().execute(
             "SELECT * FROM care_logs WHERE plant_id = ? ORDER BY at, id", (plant["id"],)))
-        unit = "cm" if plant["cm_per_px"] else "px"
+        unit = unit_of(plant, ms)
         result = evaluate(series, env, care, species_cfg(th, plant["species"]), th["general"],
                           datetime.now(), unit)
         return series, env, care, result
@@ -220,6 +232,15 @@ def create_app(data_dir=None):
             "width": e["width"],
             "area": e["area"],
             "hue": e["hue"],
+            "sat": e["sat"],
+            "exg": e.get("exg"),
+            "yellow_ratio": e.get("yellow_ratio"),
+            "scale": e.get("scale"),
+            "ref": {
+                "cm_per_px": e["ref_cm_per_px"],
+                "px_per_cm": 1 / e["ref_cm_per_px"],
+                "bbox": json.loads(e["ref_bbox"]) if e.get("ref_bbox") else None,
+            } if e.get("ref_cm_per_px") else None,
             "delta": e["delta"],
             "warnings": e["warnings"],
             "manual_height_cm": e["manual_height_cm"],
@@ -243,13 +264,15 @@ def create_app(data_dir=None):
             "created_at": plant["created_at"],
             "cm_per_px": plant["cm_per_px"],
             "calibration": json.loads(plant["calibration"]) if plant["calibration"] else None,
-            "unit": "cm" if plant["cm_per_px"] else "px",
+            "unit": "cm" if series and series[-1]["scale"] else ("cm" if plant["cm_per_px"] else "px"),
             "count": len(series),
             "first_taken_at": series[0]["taken_at"] if series else None,
             "latest": m_json(latest, env_by_m) if latest else None,
             "status": result["status"],
             "status_label": result["status_label"],
             "headline": result["headline"],
+            "today": result["today"],
+            "weekly": result["weekly"],
             "recs": result["recs"],
             "summary": result["summary"],
             "facts": result["facts"],
@@ -298,8 +321,8 @@ def create_app(data_dir=None):
         # 같은 챔버에서 최근 12시간 안에 기록한 온도·습도·조도를 미리 채워 주기 위한 값
         since = (parse_time(m["taken_at"]) - timedelta(hours=12)).isoformat()
         shared = db.row(conn().execute(
-            "SELECT at, temp, humidity, lux FROM env_logs WHERE at >= ? AND at <= ? "
-            "AND (temp IS NOT NULL OR humidity IS NOT NULL OR lux IS NOT NULL) "
+            "SELECT at, temp, humidity, lux, light_hours FROM env_logs WHERE at >= ? AND at <= ? "
+            "AND (temp IS NOT NULL OR humidity IS NOT NULL OR lux IS NOT NULL OR light_hours IS NOT NULL) "
             "AND (measurement_id IS NULL OR measurement_id != ?) ORDER BY at DESC LIMIT 1",
             (since, (parse_time(m["taken_at"]) + timedelta(hours=1)).isoformat(), mid)).fetchone())
         return clean({
@@ -312,8 +335,14 @@ def create_app(data_dir=None):
         })
 
     def read_env(body):
-        return {k: num(body.get(k), lo, hi, {"temp": "온도", "humidity": "습도", "soil": "토양 수분",
-                                              "lux": "조도"}[k]) for k, (lo, hi) in ENV_FIELDS.items()}
+        return {k: num(body.get(k), lo, hi, ENV_LABELS[k]) for k, (lo, hi) in ENV_FIELDS.items()}
+
+    def insert_env(pid, at, env, measurement_id=None):
+        conn().execute(
+            "INSERT INTO env_logs(plant_id, measurement_id, at, temp, humidity, soil, lux, light_hours) "
+            "VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+            (pid, measurement_id, at, env.get("temp"), env.get("humidity"), env.get("soil"), env.get("lux"),
+             env.get("light_hours")))
 
     # ---------------- 화면 ----------------
     @app.get("/")
@@ -423,21 +452,26 @@ def create_app(data_dir=None):
             image = load_image(f.read())
         except ValueError as exc:
             raise ApiError(str(exc)) from exc
-        cfg = species_cfg(thresholds(), plant["species"])
+        th = thresholds()
         try:
-            res = PlantAnalyzer(cfg["hsv_lower"], cfg["hsv_upper"]).analyze(image)
+            res = analyzer_for(th, plant["species"]).analyze(image)
         except PlantNotFoundError as exc:
             raise ApiError(str(exc), 422) from exc
         taken_at = parse_dt(request.form.get("taken_at")) or now_iso()
         names = save_files(plant, res, taken_at)
         m = res.metrics()
+        if th["general"].get("sticker_cm") and not m["ref_cm_per_px"] and not plant["cm_per_px"]:
+            m["warnings"].append("파란 기준 스티커를 찾지 못했어요. 스티커가 식물 옆에 잘 보이게 찍으면 cm 단위로 잴 수 있어요.")
         cur = conn().execute(
             """INSERT INTO measurements(plant_id, taken_at, photo, mask, overlay, img_w, img_h,
-                   height_px, width_px, area_px, bbox, hue, sat, val, warnings, created_at)
-               VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   height_px, width_px, area_px, bbox, hue, sat, val, yellow_ratio, exg, ref_cm_per_px,
+                   ref_bbox, warnings, created_at)
+               VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (pid, taken_at, names["photo"], names["mask"], names["overlay"], m["img_w"], m["img_h"],
              m["height_px"], m["width_px"], m["area_px"], json.dumps(m["bbox"]), m["hue"], m["sat"],
-             m["val"], json.dumps(m["warnings"], ensure_ascii=False), now_iso()))
+             m["val"], m["yellow_ratio"], m["exg"], m["ref_cm_per_px"],
+             json.dumps(m["ref_bbox"]) if m["ref_bbox"] else None,
+             json.dumps(m["warnings"], ensure_ascii=False), now_iso()))
         conn().commit()
         return jsonify(measurement_context(cur.lastrowid)), 201
 
@@ -471,10 +505,7 @@ def create_app(data_dir=None):
             env = read_env(body["env"] or {})
             conn().execute("DELETE FROM env_logs WHERE measurement_id = ?", (mid,))
             if any(v is not None for v in env.values()):
-                conn().execute(
-                    "INSERT INTO env_logs(plant_id, measurement_id, at, temp, humidity, soil, lux) "
-                    "VALUES(?, ?, ?, ?, ?, ?, ?)",
-                    (m["plant_id"], mid, taken_at, env["temp"], env["humidity"], env["soil"], env["lux"]))
+                insert_env(m["plant_id"], taken_at, env, mid)
         elif "taken_at" in fields:
             conn().execute("UPDATE env_logs SET at = ? WHERE measurement_id = ?", (taken_at, mid))
         conn().commit()
@@ -491,8 +522,7 @@ def create_app(data_dir=None):
         return jsonify(ok=True)
 
     def reanalyze_plant(plant, th):
-        cfg = species_cfg(th, plant["species"])
-        analyzer = PlantAnalyzer(cfg["hsv_lower"], cfg["hsv_upper"])
+        analyzer = analyzer_for(th, plant["species"])
         ok = failed = 0
         for m in conn().execute("SELECT * FROM measurements WHERE plant_id = ?", (plant["id"],)).fetchall():
             path = app.config["UPLOAD_DIR"] / m["photo"]
@@ -514,9 +544,11 @@ def create_app(data_dir=None):
             mt = res.metrics()
             conn().execute(
                 """UPDATE measurements SET mask = ?, overlay = ?, height_px = ?, width_px = ?,
-                       area_px = ?, bbox = ?, hue = ?, sat = ?, val = ?, warnings = ? WHERE id = ?""",
+                       area_px = ?, bbox = ?, hue = ?, sat = ?, val = ?, yellow_ratio = ?, exg = ?,
+                       ref_cm_per_px = ?, ref_bbox = ?, warnings = ? WHERE id = ?""",
                 (mask_name, overlay_name, mt["height_px"], mt["width_px"], mt["area_px"],
-                 json.dumps(mt["bbox"]), mt["hue"], mt["sat"], mt["val"],
+                 json.dumps(mt["bbox"]), mt["hue"], mt["sat"], mt["val"], mt["yellow_ratio"], mt["exg"],
+                 mt["ref_cm_per_px"], json.dumps(mt["ref_bbox"]) if mt["ref_bbox"] else None,
                  json.dumps(mt["warnings"], ensure_ascii=False), m["id"]))
             ok += 1
         conn().commit()
@@ -546,15 +578,18 @@ def create_app(data_dir=None):
         if kind not in CARE_KINDS:
             raise ApiError("관리 종류를 선택해 주세요.")
         at = parse_dt(body.get("at")) or now_iso()
+        rec_code = text(body.get("rec_code"), 40, "추천 코드")
+        if body.get("from_rec") and not rec_code:
+            # '시스템 추천을 보고 한 행동' 체크: 지금 가장 우선인 추천을 함께 저장
+            _, _, _, result = bundle(plant)
+            rec_code = result["recs"][0]["code"] if result["recs"] else "rec"
         conn().execute(
             "INSERT INTO care_logs(plant_id, at, kind, amount, note, rec_code) VALUES(?, ?, ?, ?, ?, ?)",
             (plant["id"], at, kind, num(body.get("amount"), 0, 100000, "양"),
-             text(body.get("note"), 300, "메모"), text(body.get("rec_code"), 40, "추천 코드")))
+             text(body.get("note"), 300, "메모"), rec_code))
         env = read_env(body.get("env") or {})
         if any(v is not None for v in env.values()):
-            conn().execute(
-                "INSERT INTO env_logs(plant_id, at, temp, humidity, soil, lux) VALUES(?, ?, ?, ?, ?, ?)",
-                (plant["id"], at, env["temp"], env["humidity"], env["soil"], env["lux"]))
+            insert_env(plant["id"], at, env)
         conn().commit()
         return plant_detail(pid), 201
 
@@ -572,17 +607,70 @@ def create_app(data_dir=None):
         if all(v is None for v in env.values()):
             raise ApiError("환경 값을 하나 이상 입력해 주세요.")
         at = parse_dt(body.get("at")) or now_iso()
-        conn().execute(
-            "INSERT INTO env_logs(plant_id, at, temp, humidity, soil, lux) VALUES(?, ?, ?, ?, ?, ?)",
-            (plant["id"], at, env["temp"], env["humidity"], env["soil"], env["lux"]))
-        if body.get("apply_all") and any(env[k] is not None for k in ("temp", "humidity", "lux")):
-            # 같은 챔버의 다른 식물에도 온도·습도·조도를 함께 기록 (토양 수분은 화분마다 달라서 제외)
+        insert_env(plant["id"], at, env)
+        if body.get("apply_all") and any(env[k] is not None for k in CHAMBER_FIELDS):
+            # 같은 챔버의 다른 식물에도 온도·습도·조도·조명 시간을 함께 기록 (토양 수분은 화분마다 달라서 제외)
+            shared = {k: env[k] for k in CHAMBER_FIELDS}
             for other in conn().execute("SELECT id FROM plants WHERE id != ?", (plant["id"],)).fetchall():
-                conn().execute(
-                    "INSERT INTO env_logs(plant_id, at, temp, humidity, lux) VALUES(?, ?, ?, ?, ?)",
-                    (other["id"], at, env["temp"], env["humidity"], env["lux"]))
+                insert_env(other["id"], at, shared)
         conn().commit()
         return plant_detail(pid), 201
+
+    @app.post("/api/env/bulk")
+    def add_env_bulk():
+        """기록 화면의 '챔버 환경' + '토양 수분(식물별)'을 한 번에 저장합니다.
+
+        body = {at, plant_ids: [..], temp, humidity, lux, light_hours, soil: {"<plant_id>": 45, ...}}
+        - 챔버 값은 plant_ids 로 고른 식물에 같은 값으로 기록
+        - 토양 수분은 식물마다 따로 기록 (챔버 값을 고르지 않은 식물도 토양 수분만 기록 가능)
+        """
+        body = request.get_json(silent=True) or {}
+        at = parse_dt(body.get("at")) or now_iso()
+        chamber = {k: num(body.get(k), *ENV_FIELDS[k], ENV_LABELS[k]) for k in CHAMBER_FIELDS}
+        soil_in = body.get("soil") or {}
+        if not isinstance(soil_in, dict):
+            raise ApiError("토양 수분 형식이 올바르지 않아요.")
+        soil = {}
+        for key, value in soil_in.items():
+            v = num(value, *ENV_FIELDS["soil"], "토양 수분")
+            if v is not None:
+                soil[int(key)] = v
+        ids = set()
+        for x in body.get("plant_ids") or []:
+            try:
+                ids.add(int(x))
+            except (TypeError, ValueError) as exc:
+                raise ApiError("식물 선택이 올바르지 않아요.") from exc
+        has_chamber = any(v is not None for v in chamber.values())
+        if not has_chamber and not soil:
+            raise ApiError("환경 값을 하나 이상 입력해 주세요.")
+        if has_chamber and not ids:
+            raise ApiError("같은 값을 적용할 식물을 하나 이상 골라 주세요.")
+        known = {r["id"] for r in conn().execute("SELECT id FROM plants")}
+        targets = (ids if has_chamber else set()) | set(soil)
+        if targets - known:
+            raise ApiError("식물을 찾을 수 없어요.", 404)
+        for pid in sorted(targets):
+            env = dict(chamber) if pid in ids else {}
+            env["soil"] = soil.get(pid)
+            if any(v is not None for v in env.values()):
+                insert_env(pid, at, env)
+        conn().commit()
+        return jsonify(ok=True, count=len(targets)), 201
+
+    @app.get("/api/care")
+    def recent_care():
+        """모든 식물의 관리 기록 (최근 순). 홈의 '최근 관리 기록'과 기록 화면에서 씁니다."""
+        try:
+            limit = max(1, min(500, int(request.args.get("limit", 20))))
+        except ValueError:
+            limit = 20
+        items = db.rows(conn().execute(
+            "SELECT c.*, p.name AS plant_name, p.species AS species FROM care_logs c "
+            "JOIN plants p ON p.id = c.plant_id ORDER BY c.at DESC, c.id DESC LIMIT ?", (limit,)))
+        for c in items:
+            c["kind_label"] = CARE_KINDS.get(c["kind"], c["kind"])
+        return jsonify(clean({"items": items}))
 
     @app.delete("/api/env/<int:eid>")
     def delete_env(eid):
@@ -614,6 +702,7 @@ def create_app(data_dir=None):
         gen["rate_window"] = max(1, min(10, gen["rate_window"]))
         gen["env_lookback"] = max(1, min(10, gen["env_lookback"]))
         gen["persist_count"] = max(1, min(gen["env_lookback"], gen["persist_count"]))
+        gen["sticker_cm"] = max(0.0, min(20.0, float(gen.get("sticker_cm") or 0)))
         db.set_setting(conn(), "thresholds", merged)
         conn().commit()
         return get_settings()
@@ -632,6 +721,7 @@ def create_app(data_dir=None):
         for p in db.rows(conn().execute("SELECT * FROM plants ORDER BY id")):
             series, env, care, result = bundle(p, th)
             first = series[0] if series else None
+            unit = "cm" if series and series[-1]["scale"] else ("cm" if p["cm_per_px"] else "px")
             points = []
             for e in series:
                 points.append({
@@ -643,8 +733,10 @@ def create_app(data_dir=None):
                     "height": e["height"],
                     "width": e["width"],
                     "area": e["area"],
+                    "area_rate": (e["delta"] or {}).get("area_pct_per_day"),
+                    "yellow_ratio": e.get("yellow_ratio"),
                 })
-                if p["cm_per_px"] and (e["manual_height_cm"] or e["manual_width_cm"]):
+                if unit == "cm" and (e["manual_height_cm"] or e["manual_width_cm"]):
                     accuracy.append({
                         "plant": p["name"],
                         "taken_at": e["taken_at"],
@@ -654,8 +746,10 @@ def create_app(data_dir=None):
             out.append({
                 "id": p["id"], "name": p["name"], "code": p["code"], "species": p["species"],
                 "species_label": species_cfg(th, p["species"])["label"],
-                "unit": "cm" if p["cm_per_px"] else "px",
+                "unit": unit,
                 "points": points,
+                "env": [{k: x[k] for k in ("at", *ENV_FIELDS)} for x in env],
+                "care": [{"at": c["at"], "kind": c["kind"], "amount": c["amount"]} for c in care],
                 "status": result["status"], "status_label": result["status_label"],
                 "summary": result["summary"],
                 "care_count": len(care),
@@ -685,12 +779,12 @@ def create_app(data_dir=None):
         w = csv.writer(buf)
         w.writerow(["날짜", "식물ID", "식물 이름", "종류", "높이", "폭", "투영면적", "단위",
                     "면적 변화(%)", "면적 생장률(%/일)", "높이 생장률(/일)", "잎 평균 Hue",
-                    "온도(℃)", "습도(%)", "토양 수분(%)", "조도(lux)",
+                    "노란 잎 비율(%)", "ExG", "온도(℃)", "습도(%)", "토양 수분(%)", "조도(lux)", "조명 시간(h)",
                     "직접 측정 높이(cm)", "직접 측정 폭(cm)", "잎 수", "같은 날 관리 행동", "메모", "사진 파일"])
         for p in db.rows(conn().execute("SELECT * FROM plants ORDER BY id")):
             series, env, care, _ = bundle(p, th)
             env_by_m = {e["measurement_id"]: e for e in env if e["measurement_id"]}
-            unit = "cm" if p["cm_per_px"] else "px"
+            unit = "cm" if series and series[-1]["scale"] else ("cm" if p["cm_per_px"] else "px")
             for e in series:
                 d = e["delta"] or {}
                 ev = env_by_m.get(e["id"]) or {}
@@ -706,8 +800,9 @@ def create_app(data_dir=None):
                             species_cfg(th, p["species"])["label"],
                             f(e["height"]), f(e["width"]), f(e["area"]), unit,
                             f(d.get("area_pct")), f(d.get("area_pct_per_day")), f(d.get("height_per_day")),
-                            f(e["hue"], 2), f(ev.get("temp")), f(ev.get("humidity")), f(ev.get("soil")),
-                            f(ev.get("lux")), f(e["manual_height_cm"]), f(e["manual_width_cm"]),
+                            f(e["hue"], 2), f(e.get("yellow_ratio"), 2), f(e.get("exg"), 3),
+                            f(ev.get("temp")), f(ev.get("humidity")), f(ev.get("soil")),
+                            f(ev.get("lux")), f(ev.get("light_hours")), f(e["manual_height_cm"]), f(e["manual_width_cm"]),
                             e["leaf_count"] if e["leaf_count"] is not None else "", acts, e["note"] or "",
                             e["photo"]])
         data = "﻿" + buf.getvalue()  # 엑셀에서 한글이 깨지지 않도록 BOM 추가

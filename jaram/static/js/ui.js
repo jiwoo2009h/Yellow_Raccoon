@@ -69,6 +69,14 @@ export const icons = {
   refresh: P('<path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4.5v4h-4"/>'),
   moon: P('<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>'),
   book: P('<path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H11v16H5.5A1.5 1.5 0 0 1 4 18.5z"/><path d="M20 5.5A1.5 1.5 0 0 0 18.5 4H13v16h5.5a1.5 1.5 0 0 0 1.5-1.5z"/>'),
+  clock: P('<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>'),
+  upload: P('<path d="M12 15V4.5M7.5 9 12 4.5 16.5 9"/><path d="M4.5 15v3.5a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5V15"/>'),
+  clipboard: P('<rect x="5" y="4.5" width="14" height="16" rx="2"/><path d="M9 4.5V3.5h6v1"/><path d="M9 10h6M9 14h6M9 18h3"/>'),
+  graph: P('<path d="M4 4v16h16"/><path d="m7.5 14.5 3.5-4 3 2.5 5-6"/>'),
+  thermo: P('<path d="M14 14.8V5a2 2 0 1 0-4 0v9.8a4 4 0 1 0 4 0z"/><path d="M12 15.5V9"/>'),
+  alert: P('<path d="M12 4 2.5 20h19z"/><path d="M12 10v4.5M12 17.5h.01"/>'),
+  wind: P('<path d="M3 8h11a3 3 0 1 0-3-3"/><path d="M3 12h15a3 3 0 1 1-3 3"/><path d="M3 16h7"/>'),
+  bulb: P('<path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.5 10.9c.6.4 1 1.1 1 1.8V16h5v-.3c0-.7.4-1.4 1-1.8A6 6 0 0 0 12 3z"/>'),
   sliders: P('<path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/>'),
   up: '<svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M6 2.5 10 8.5H2z" fill="currentColor"/></svg>',
   down: '<svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M6 9.5 2 3.5h8z" fill="currentColor"/></svg>',
@@ -143,13 +151,64 @@ export function isToday(s) {
   return d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate();
 }
 
-// ---------------------------------------------------------------- 상태 배지
-const STATUS_ICON = { good: 'checkCircle', observe: 'eye', care: 'warn', pending: 'sprout', info: 'info' };
+export const WEEKDAYS = WEEK;
+/** 받침에 맞는 조사: josa('상큼이', '을', '를') -> '상큼이를' */
+export function josa(word, withFinal, withoutFinal) {
+  const c = String(word).trim().slice(-1).charCodeAt(0);
+  const has = c >= 0xac00 && c <= 0xd7a3 ? (c - 0xac00) % 28 !== 0 : false;
+  return `${word}${has ? withFinal : withoutFinal}`;
+}
+/** 로컬 날짜 키 'YYYY-MM-DD' */
+export function dayKey(s) {
+  const d = parseDate(s);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+/** '10월 23일 08:30' */
+export function dateTimeShort(s) {
+  const d = parseDate(s);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getMonth() + 1}월 ${d.getDate()}일 ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+// ---------------------------------------------------------------- 품종·상태
+/** 화면에 보이는 품종 이름 (서버의 species 키 -> 이름) */
+export const VARIETY = { basil: '스위트 바질', lettuce: '상추', other: '기타 식물' };
+export const VARIETY_ORDER = ['basil', 'lettuce', 'other'];
+export function variety(species) { return VARIETY[species] || species; }
+/** '스위트 바질 - 바질이' */
+export function plantTitle(p) { return `${variety(p.species)} - ${p.name}`; }
+
 export function statusBadge(status, label) {
-  return h('span', { class: `badge badge-${status}` }, h('span', { html: icons[STATUS_ICON[status]] || '', style: { display: 'inline-flex' } }), label);
+  return h('span', { class: `badge badge-${status}` }, label);
+}
+const REC_ICON = { water_needed: 'drop', water_done: 'drop', soil_low_watch: 'drop', overwater: 'drop', water_interval: 'drop',
+  light_low: 'sun', light_done: 'sun', light_low_watch: 'sun', env_check: 'thermo', env_watch: 'thermo',
+  hue_drop: 'eye', yellow_leaf: 'eye', keep: 'check', sudden_drop: 'alert', slowing: 'eye' };
+export function recIcon(code) { return REC_ICON[code] || 'info'; }
+
+/** 추천 상자 (제목 + 설명). level: good / observe / care / info */
+export function recBox(rec, { compact = false } = {}) {
+  if (!rec) return null;
+  return h('div', { class: `rec-box ${rec.level}` },
+    h('span', { html: icons[recIcon(rec.code)], style: { display: 'contents' } }),
+    h('div', null,
+      h('div', { class: 't' }, rec.title),
+      compact ? null : h('div', { class: 'b' }, rec.body)));
 }
 
 // ---------------------------------------------------------------- 공통 화면 요소
+/** 화면 위쪽의 '‹ 뒤로' 링크 */
+export function backLink(label = '뒤로', fallback = '#/') {
+  return h('button', { class: 'back-link', type: 'button', onclick: () => goBack(fallback) },
+    h('span', { html: icons.back, style: { display: 'contents' } }), label);
+}
+
+/** 아이콘이 붙은 버튼 내용 */
+export function withIcon(name, label) {
+  return [h('span', { html: icons[name], style: { display: 'contents' } }), label];
+}
+
 export function topbar({ title = '', back = true, right = null, onBack } = {}) {
   return h('header', { class: 'topbar' },
     back ? h('button', { class: 'icon-btn', 'aria-label': '뒤로', html: icons.back, onclick: onBack || (() => goBack()) }) : h('span', { class: 'topbar-spacer' }),
@@ -183,6 +242,20 @@ export function chips(options, value, onChange, cls = 'chips') {
     }, label)));
   };
   render(value);
+  return wrap;
+}
+
+/** 여러 개를 고를 수 있는 칩. onChange(Set) */
+export function multiChips(options, selected, onChange, cls = 'chips') {
+  const wrap = h('div', { class: cls, role: 'group' });
+  const sel = new Set(selected);
+  const render = () => {
+    wrap.replaceChildren(...options.map(([v, label]) => h('button', {
+      type: 'button', class: 'chip', 'aria-pressed': String(sel.has(v)),
+      onclick: () => { if (sel.has(v)) sel.delete(v); else sel.add(v); render(); onChange(new Set(sel)); },
+    }, label)));
+  };
+  render();
   return wrap;
 }
 

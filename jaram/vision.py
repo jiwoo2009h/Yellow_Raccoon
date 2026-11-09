@@ -7,7 +7,10 @@
   4. Morphological Operation (Opening -> Closing)
   5. Contour 검출 후 식물 영역 선택
   6. 경계 상자로 높이·폭, 픽셀 수로 투영 면적 계산
-  7. 기준물(자)로 픽셀 -> cm 환산 (환산은 저장된 보정값으로 growth.py 에서 수행)
+  7. 기준물로 픽셀 -> cm 환산
+     - 파란 기준 스티커가 사진에 있으면 스티커 한 변의 픽셀 수로 사진마다 자동 환산
+     - 없으면 '크기 보정' 화면에서 자로 잡은 보정값 사용 (환산은 growth.py 에서 수행)
+  8. 잎 색: 평균 Hue·채도, ExG(초록 지수), 노란 잎 비율
 """
 
 from dataclasses import dataclass, field
@@ -20,6 +23,14 @@ from PIL import Image, ImageOps
 # 모든 사진을 긴 변 기준 이 크기로 맞춥니다.
 # 같은 위치에서 찍으면 사진마다 '1픽셀 = 같은 실제 길이'가 되도록 하기 위함입니다.
 TARGET_LONG_SIDE = 1280
+
+# 파란 기준 스티커 (OpenCV HSV: H 0~179). 초록 식물·갈색 화분과 겹치지 않는 파란색 범위
+REF_HSV_LOWER = (95, 120, 50)
+REF_HSV_UPPER = (130, 255, 255)
+# 노란 잎으로 볼 색 범위 (OpenCV H 15~28 ≈ 30~56°). 상추처럼 초록 범위 하한이 낮으면
+# 노란 잎이 식물 면적에도 함께 들어가는데, 그래도 노란 잎 비율은 따로 계산됩니다.
+YELLOW_LOWER = (15, 70, 90)
+YELLOW_UPPER = (28, 255, 255)
 
 
 class PlantNotFoundError(ValueError):
@@ -41,6 +52,9 @@ class AnalysisResult:
     mask: np.ndarray = field(repr=False)
     overlay: np.ndarray = field(repr=False)
     warnings: list = field(default_factory=list)
+    yellow_ratio: float = 0.0
+    exg: float = 0.0
+    ref: dict = None  # {"cm_per_px", "px_per_cm", "bbox"} 기준 스티커를 찾았을 때
 
     def metrics(self):
         x, y, w, h = self.bbox
@@ -54,6 +68,10 @@ class AnalysisResult:
             "val": round(self.val, 2),
             "img_w": self.img_w,
             "img_h": self.img_h,
+            "yellow_ratio": round(self.yellow_ratio, 3),
+            "exg": round(self.exg, 4),
+            "ref_cm_per_px": self.ref["cm_per_px"] if self.ref else None,
+            "ref_bbox": self.ref["bbox"] if self.ref else None,
             "warnings": self.warnings,
         }
 
@@ -79,9 +97,11 @@ def normalize_size(image: np.ndarray, long_side: int = TARGET_LONG_SIDE) -> np.n
 
 
 class PlantAnalyzer:
-    def __init__(self, hsv_lower=(30, 40, 35), hsv_upper=(90, 255, 255)):
+    def __init__(self, hsv_lower=(30, 40, 35), hsv_upper=(90, 255, 255), sticker_cm=None):
         self.hsv_lower = np.array(hsv_lower, dtype=np.uint8)
         self.hsv_upper = np.array(hsv_upper, dtype=np.uint8)
+        # 파란 기준 스티커 한 변의 실제 길이(cm). None/0 이면 스티커를 찾지 않습니다.
+        self.sticker_cm = sticker_cm if sticker_cm and sticker_cm > 0 else None
 
     # ---- 2~4단계: 전처리 + HSV Thresholding + 형태학적 연산 ----
     def segment(self, image: np.ndarray) -> np.ndarray:
@@ -159,8 +179,12 @@ class PlantAnalyzer:
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         mean_h, mean_s, mean_v, _ = cv2.mean(hsv, mask=plant_mask)
 
+        yellow_ratio = self.yellow_ratio(hsv, plant_mask, selected)
+        exg = self.excess_green(image, plant_mask)
+        ref = self.find_reference(hsv)
+
         warnings = self.quality_warnings(image, hsv, bbox, area_px)
-        overlay = self.draw_overlay(image, plant_mask, selected, bbox)
+        overlay = self.draw_overlay(image, plant_mask, selected, bbox, ref)
         return AnalysisResult(
             height_px=int(h),
             width_px=int(w),
@@ -175,7 +199,66 @@ class PlantAnalyzer:
             mask=plant_mask,
             overlay=overlay,
             warnings=warnings,
+            yellow_ratio=yellow_ratio,
+            exg=exg,
+            ref=ref,
         )
+
+    # ---- 8단계: 잎 색 지표 ----
+    def yellow_ratio(self, hsv, plant_mask, contours):
+        """식물 윤곽(볼록 껍질) 안에서 노란 픽셀의 비율(%). 노랗게 변한 잎은 초록 범위에서 빠지므로 따로 셉니다."""
+        hull = cv2.convexHull(np.vstack(contours))
+        region = np.zeros(plant_mask.shape, np.uint8)
+        cv2.fillConvexPoly(region, hull, 255)
+        yellow = cv2.inRange(hsv, np.array(YELLOW_LOWER, np.uint8), np.array(YELLOW_UPPER, np.uint8))
+        yellow = cv2.bitwise_and(yellow, region)
+        leaves = cv2.countNonZero(cv2.bitwise_or(yellow, plant_mask))
+        return float(cv2.countNonZero(yellow) / leaves * 100) if leaves else 0.0
+
+    @staticmethod
+    def excess_green(image, plant_mask):
+        """ExG = 2g - r - b (r, g, b 는 R+G+B 로 나눈 색 좌표). 클수록 진한 초록."""
+        px = image[plant_mask > 0].astype(np.float64)
+        if not len(px):
+            return 0.0
+        total = px.sum(axis=1)
+        total[total == 0] = 1
+        b, g, r = (px[:, i] / total for i in range(3))
+        return float(np.mean(2 * g - r - b))
+
+    # ---- 7단계: 기준물(파란 스티커)로 크기 환산 ----
+    def find_reference(self, hsv):
+        """사진에서 정사각형에 가까운 가장 큰 파란 덩어리를 기준 스티커로 봅니다."""
+        if not self.sticker_cm:
+            return None
+        img_h, img_w = hsv.shape[:2]
+        mask = cv2.inRange(hsv, np.array(REF_HSV_LOWER, np.uint8), np.array(REF_HSV_UPPER, np.uint8))
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        best = None
+        for c in contours:
+            area = cv2.contourArea(c)
+            if area < img_w * img_h * 0.0002:
+                continue
+            (_, _), (rw, rh), _ = cv2.minAreaRect(c)
+            if min(rw, rh) < 8 or max(rw, rh) / min(rw, rh) > 1.5:
+                continue
+            if area / (rw * rh) < 0.75:  # 꽉 찬 사각형이 아니면 스티커가 아님
+                continue
+            if best is None or area > best[0]:
+                best = (area, c, rw, rh)
+        if best is None:
+            return None
+        area, c, rw, rh = best
+        side_px = (rw + rh) / 2
+        x, y, w, h = cv2.boundingRect(c)
+        return {
+            "cm_per_px": self.sticker_cm / side_px,
+            "px_per_cm": side_px / self.sticker_cm,
+            "bbox": [int(x), int(y), int(w), int(h)],
+        }
 
     @staticmethod
     def quality_warnings(image, hsv, bbox, area_px):
@@ -196,15 +279,17 @@ class PlantAnalyzer:
         return warnings
 
     @staticmethod
-    def draw_overlay(image, plant_mask, contours, bbox):
-        """분석 결과 이미지: 배경은 어둡게, 식물 영역은 초록으로 강조, 높이·폭 상자 표시."""
-        dim = (image * 0.45).astype(np.uint8)
-        tint = np.full_like(image, (90, 200, 60))  # BGR 초록
-        plant = cv2.addWeighted(image, 0.55, tint, 0.45, 0)
-        out = np.where(plant_mask[..., None] > 0, plant, dim)
-        cv2.drawContours(out, contours, -1, (255, 255, 255), 2, lineType=cv2.LINE_AA)
+    def draw_overlay(image, plant_mask, contours, bbox, ref=None):
+        """분석 결과 이미지: 식물 영역은 초록으로 칠하고, 높이·폭 상자(빨강)와 기준 스티커(파랑)를 표시."""
+        tint = np.full_like(image, (40, 175, 30))  # BGR 초록
+        plant = cv2.addWeighted(image, 0.25, tint, 0.75, 0)
+        out = np.where(plant_mask[..., None] > 0, plant, image)
+        cv2.drawContours(out, contours, -1, (255, 255, 255), 1, lineType=cv2.LINE_AA)
         x, y, w, h = bbox
-        cv2.rectangle(out, (x, y), (x + w, y + h), (255, 255, 255), 1, lineType=cv2.LINE_AA)
+        cv2.rectangle(out, (x, y), (x + w, y + h), (40, 40, 230), 3, lineType=cv2.LINE_AA)
+        if ref:
+            rx, ry, rw, rh = ref["bbox"]
+            cv2.rectangle(out, (rx - 4, ry - 4), (rx + rw + 4, ry + rh + 4), (230, 110, 30), 3, lineType=cv2.LINE_AA)
         return out
 
 

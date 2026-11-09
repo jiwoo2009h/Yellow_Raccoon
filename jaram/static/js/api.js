@@ -42,6 +42,8 @@ export const api = {
   addCare: (id, body) => request('POST', `/api/plants/${id}/care`, body),
   deleteCare: (id) => request('DELETE', `/api/care/${id}`),
   addEnv: (id, body) => request('POST', `/api/plants/${id}/env`, body),
+  addEnvBulk: (body) => request('POST', '/api/env/bulk', body),
+  careList: (limit = 20) => request('GET', `/api/care?limit=${limit}`),
   deleteEnv: (id) => request('DELETE', `/api/env/${id}`),
   reanalyze: (id) => request('POST', id ? `/api/plants/${id}/reanalyze` : '/api/reanalyze'),
   settings: () => request('GET', '/api/settings'),

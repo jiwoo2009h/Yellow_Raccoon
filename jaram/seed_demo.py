@@ -21,7 +21,7 @@ import numpy as np
 
 
 def draw_plant(size, species="basil", seed=0, width=960, height=1280, light=1.0, hue_shift=0, ruler=True,
-               noise_seed=None):
+               noise_seed=None, sticker=False, yellow=0.0):
     """합성 식물 사진 (BGR). size 가 클수록 잎이 크고 많아집니다."""
     rng = np.random.default_rng(seed)
     img = np.zeros((height, width, 3), np.uint8)
@@ -46,6 +46,10 @@ def draw_plant(size, species="basil", seed=0, width=960, height=1280, light=1.0,
             y = int(height * 0.25) + 20 + i * 4
             ln = 22 if i % 10 == 0 else (14 if i % 5 == 0 else 8)
             cv2.line(img, (rx, y), (rx + ln, y), (30, 30, 30), 1)
+    # 파란 기준 스티커: 2cm = 80px (자와 같은 40px/cm)
+    if sticker:
+        sx, sy = int(width * 0.74), int(height * 0.82)
+        cv2.rectangle(img, (sx, sy), (sx + 79, sy + 79), (205, 85, 25), -1)
 
     base_y = pot_top - 14
     # 잎 배치는 식물마다 고정(seed), 크기만 size 에 따라 연속적으로 커집니다.
@@ -64,7 +68,10 @@ def draw_plant(size, species="basil", seed=0, width=960, height=1280, light=1.0,
             lx = int(cx + math.cos(ang) * length * 0.55)
             ly = int(base_y + math.sin(ang) * length * 0.55)
             axes = (int(length * 0.42), int(length * 0.3))
-            cv2.ellipse(img, (lx, ly), axes, math.degrees(ang), 0, 360, (color * tone).tolist(), -1, cv2.LINE_AA)
+            leaf_color = (color * tone).tolist()
+            if i < round(total * yellow):  # 먼저 난(가운데) 잎부터 노랗게
+                leaf_color = [30, 190, 235]
+            cv2.ellipse(img, (lx, ly), axes, math.degrees(ang), 0, 360, leaf_color, -1, cv2.LINE_AA)
     else:
         color = np.array([45, 140, 55], float)  # 진한 초록 (BGR)
         stem_h = int(80 + 330 * size)
@@ -97,22 +104,26 @@ def draw_plant(size, species="basil", seed=0, width=960, height=1280, light=1.0,
 
 # 식물별 시나리오: 일차 -> (크기, 환경, 관리)
 PLANTS = [
-    # 바질 1: 정상 생육
-    {"name": "바질 1", "code": "B1", "species": "basil",
+    # 바질이: 정상 생육
+    {"name": "바질이", "code": "B1", "species": "basil",
      "growth": lambda d: 0.18 + 0.05 * d,
-     "env": lambda d: {"temp": 23 + (d % 3) * 0.6, "humidity": 55, "soil": 55 - (d % 3) * 8, "lux": 12000}},
-    # 바질 2: 후반에 흙이 마르면서 생장 둔화 -> 물주기 추천
-    {"name": "바질 2", "code": "B2", "species": "basil",
+     "env": lambda d: {"temp": 23 + (d % 3) * 0.6, "humidity": 55, "soil": 55 - (d % 3) * 8, "lux": 12000,
+                       "light_hours": 14}},
+    # 향긋이: 후반에 흙이 마르면서 생장 둔화 -> 물주기 추천
+    {"name": "향긋이", "code": "B2", "species": "basil",
      "growth": lambda d: 0.16 + 0.05 * min(d, 9) + 0.006 * max(0, d - 9),
-     "env": lambda d: {"temp": 23.5, "humidity": 52, "soil": max(14, 58 - 3.4 * d), "lux": 11500}},
-    # 상추 1: 조도가 낮아지며 생장 둔화 -> 광환경 확인 추천
-    {"name": "상추 1", "code": "L1", "species": "lettuce",
+     "env": lambda d: {"temp": 23.5, "humidity": 52, "soil": max(12, 58 - 3.4 * d), "lux": 11500,
+                       "light_hours": 14}},
+    # 아삭이: 잘 자라지만 후반에 잎이 노랗게 변함 -> 잎 색 변화 관찰
+    {"name": "아삭이", "code": "L1", "species": "lettuce",
+     "growth": lambda d: 0.2 + 0.045 * d,
+     "yellow": lambda d: 0.0 if d < 10 else (0.3 if d < 12 else 0.5),
+     "env": lambda d: {"temp": 19, "humidity": 62, "soil": 60 - (d % 2) * 6, "lux": 9000, "light_hours": 12}},
+    # 쌈쌈이: 조도가 낮아지며 생장 둔화 -> 광환경 확인 추천
+    {"name": "쌈쌈이", "code": "L2", "species": "lettuce",
      "growth": lambda d: 0.2 + 0.045 * min(d, 10) + 0.006 * max(0, d - 10),
-     "env": lambda d: {"temp": 19, "humidity": 62, "soil": 60 - (d % 2) * 6, "lux": 9000 if d < 10 else 3200}},
-    # 상추 2: 온도가 높지만 아직 생장은 유지 -> 관찰
-    {"name": "상추 2", "code": "L2", "species": "lettuce",
-     "growth": lambda d: 0.18 + 0.05 * d,
-     "env": lambda d: {"temp": 22 if d < 10 else 27.5, "humidity": 64, "soil": 62 - (d % 2) * 5, "lux": 9500}},
+     "env": lambda d: {"temp": 20, "humidity": 64, "soil": 58 - (d % 2) * 5, "lux": 9000 if d < 10 else 3000,
+                       "light_hours": 12 if d < 10 else 9}},
 ]
 DAYS = [0, 1, 3, 4, 5, 7, 8, 10, 11, 12, 14]
 
@@ -126,14 +137,22 @@ def seed(data_dir):
     app = create_app(data_dir)
     client = app.test_client()
     start = (datetime.now() - timedelta(days=DAYS[-1])).replace(hour=9, minute=30, second=0, microsecond=0)
+    if start + timedelta(days=DAYS[-1], hours=7) > datetime.now():
+        start -= timedelta(days=1)  # 마지막 기록(물주기·위치 변경 포함)이 '지금'보다 미래가 되지 않도록
 
     for idx, spec in enumerate(PLANTS):
         res = client.post("/api/plants", json={"name": spec["name"], "code": spec["code"], "species": spec["species"]})
         pid = res.get_json()["id"]
-        first_mid = None
+        if idx >= 2:
+            # 뒤쪽 2개(상추)는 스티커 없이 자로 크기 보정: 그림의 자 10cm = 세로 400px (서버 사진도 긴 변 1280px)
+            client.patch(f"/api/plants/{pid}", json={"calibration": {
+                "x1": 845, "y1": 340, "x2": 845, "y2": 740, "length_cm": 10}})
         for day in DAYS:
             at = start + timedelta(days=day, minutes=idx * 3)
-            img = draw_plant(spec["growth"](day), spec["species"], seed=idx * 100, noise_seed=day)
+            yellow = spec.get("yellow", lambda d: 0.0)(day)
+            # 앞쪽 식물 2개는 기준 스티커로, 뒤쪽 2개는 자 보정으로 cm 환산 (두 방법 모두 보여 주기)
+            img = draw_plant(spec["growth"](day), spec["species"], seed=idx * 100, noise_seed=day,
+                             sticker=idx < 2, yellow=yellow)
             ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 92])
             res = client.post(f"/api/plants/{pid}/measurements",
                               data={"taken_at": at.isoformat(), "photo": (io.BytesIO(buf.tobytes()), f"{spec['code']}_{day}.jpg")},
@@ -141,21 +160,22 @@ def seed(data_dir):
             body = res.get_json()
             assert res.status_code == 201, body
             mid = body["measurement"]["id"]
-            first_mid = first_mid or mid
             patch = {"env": spec["env"](day)}
             if day in (0, 7, 14):
                 patch["manual_height_cm"] = round(body["measurement"]["height_px"] / 40 * (1 + 0.04 * ((day % 3) - 1)), 1)
                 patch["manual_width_cm"] = round(body["measurement"]["width_px"] / 40 * 1.02, 1)
             client.patch(f"/api/measurements/{mid}", json=patch)
-            if spec["code"] in ("B1", "L1", "L2") and day in (1, 4, 8, 11):
+            if spec["code"] in ("B1", "L1", "L2") and day in (1, 4, 8, 11, 14):
                 client.post(f"/api/plants/{pid}/care",
-                            json={"kind": "water", "amount": 150, "at": (at + timedelta(hours=1)).isoformat()})
+                            json={"kind": "water", "amount": 150, "at": (at + timedelta(hours=1)).isoformat(),
+                                  "from_rec": day >= 11})
             if spec["code"] == "B2" and day in (1, 5):
                 client.post(f"/api/plants/{pid}/care",
                             json={"kind": "water", "amount": 120, "at": (at + timedelta(hours=1)).isoformat()})
-        # 자 보정: 그림의 자 10cm = 세로 400px(원본 1280px 기준). 서버에 저장된 사진도 긴 변 1280px.
-        client.patch(f"/api/plants/{pid}", json={"calibration": {
-            "x1": 845, "y1": 340, "x2": 845, "y2": 740, "length_cm": 10, "measurement_id": first_mid}})
+            if spec["code"] == "L2" and day == 12:
+                client.post(f"/api/plants/{pid}/care",
+                            json={"kind": "move", "note": "창가 쪽 20cm", "from_rec": True,
+                                  "at": (at + timedelta(hours=6)).isoformat()})
     print(f"데모 데이터를 만들었어요: {data_dir.resolve()}")
 
 

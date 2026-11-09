@@ -31,6 +31,10 @@ CREATE TABLE IF NOT EXISTS measurements (
     hue              REAL,
     sat              REAL,
     val              REAL,
+    yellow_ratio     REAL,
+    exg              REAL,
+    ref_cm_per_px    REAL,
+    ref_bbox         TEXT,
     warnings         TEXT,
     manual_height_cm REAL,
     manual_width_cm  REAL,
@@ -47,7 +51,8 @@ CREATE TABLE IF NOT EXISTS env_logs (
     temp           REAL,
     humidity       REAL,
     soil           REAL,
-    lux            REAL
+    lux            REAL,
+    light_hours    REAL
 );
 
 CREATE TABLE IF NOT EXISTS care_logs (
@@ -78,9 +83,26 @@ def connect(path):
     return conn
 
 
+# 이전 버전 DB에 나중에 추가된 열 (이미 있는 data/jaram.db 도 그대로 쓸 수 있도록)
+MIGRATIONS = {
+    "measurements": {
+        "yellow_ratio": "REAL",
+        "exg": "REAL",
+        "ref_cm_per_px": "REAL",
+        "ref_bbox": "TEXT",
+    },
+    "env_logs": {"light_hours": "REAL"},
+}
+
+
 def init(path):
     conn = connect(path)
     conn.executescript(SCHEMA)
+    for table, cols in MIGRATIONS.items():
+        have = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        for col, kind in cols.items():
+            if col not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {kind}")
     conn.commit()
     conn.close()
 

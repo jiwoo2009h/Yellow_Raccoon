@@ -28,16 +28,32 @@ def pct_change(before, after):
     return (after - before) / before * 100
 
 
-def with_units(measurements, cm_per_px=None):
-    """픽셀 값에 보정값을 적용해 height/width/area 를 만들고, 직전 기록과의 변화를 붙입니다.
+def scale_for(measurements, cm_per_px=None):
+    """식물의 기본 환산값(cm/px). 자 보정값이 있으면 그것을, 없으면 기준 스티커로 잰 값들의 중앙값을 씁니다."""
+    if cm_per_px and cm_per_px > 0:
+        return cm_per_px
+    refs = sorted(m["ref_cm_per_px"] for m in measurements if m.get("ref_cm_per_px"))
+    if not refs:
+        return None
+    mid = len(refs) // 2
+    return refs[mid] if len(refs) % 2 else (refs[mid - 1] + refs[mid]) / 2
 
-    보정값(cm_per_px)이 없으면 픽셀 단위 그대로 씁니다. 상대 변화(%)는 단위와 무관합니다.
+
+def with_units(measurements, cm_per_px=None):
+    """픽셀 값을 cm 로 바꾸고, 직전 기록과의 변화를 붙입니다.
+
+    - 사진에 파란 기준 스티커가 있으면 그 사진의 환산값(ref_cm_per_px)을 씁니다.
+      (촬영 거리가 조금 달라져도 사진마다 정확히 환산됨)
+    - 없으면 식물의 자 보정값, 그것도 없으면 다른 사진의 스티커 환산값 중앙값을 씁니다.
+    - 아무 환산값도 없으면 픽셀 단위 그대로 씁니다. 상대 변화(%)는 단위와 무관합니다.
     """
-    k = cm_per_px if cm_per_px and cm_per_px > 0 else None
+    base = scale_for(measurements, cm_per_px)
     out = []
     prev = None
     for m in measurements:
         e = dict(m)
+        k = (m.get("ref_cm_per_px") or base) if base else None
+        e["scale"] = k
         e["height"] = m["height_px"] * k if k else float(m["height_px"])
         e["width"] = m["width_px"] * k if k else float(m["width_px"])
         e["area"] = m["area_px"] * k * k if k else float(m["area_px"])

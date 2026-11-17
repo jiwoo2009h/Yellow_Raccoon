@@ -1,0 +1,9 @@
+{
+  "name": "자람 디자인 만들기",
+  "id": "jaram-design-builder",
+  "api": "1.0.0",
+  "main": "code.js",
+  "editorType": ["figma"],
+  "documentAccess": "dynamic-page",
+  "networkAccess": { "allowedDomains": ["none"] }
+}

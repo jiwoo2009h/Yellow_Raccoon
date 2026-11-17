@@ -2,13 +2,33 @@
 
 const MAX_SIDE = 1600;
 
+/** 사용자에게 그대로 보여 줄 수 있는 오류 */
+function imageError(message) {
+  const err = new Error(message);
+  err.userFacing = true;
+  return err;
+}
+
+const isHeic = (file) => /image\/hei[cf]/i.test(file.type || '') || /\.hei[cf]$/i.test(file.name || '');
+
 /** 사진을 긴 변 1600px JPEG 로 줄입니다. (휴대폰 회전 정보는 브라우저가 자동으로 반영) */
 export async function prepareImage(file) {
+  if (file.type && !file.type.startsWith('image/')) throw imageError('사진 파일만 올릴 수 있어요.');
   let source;
+  let url = null;
   try {
     source = await createImageBitmap(file, { imageOrientation: 'from-image' });
   } catch {
-    source = await loadImg(URL.createObjectURL(file));
+    try {
+      url = URL.createObjectURL(file);
+      source = await loadImg(url);
+    } catch {
+      throw imageError(isHeic(file)
+        ? 'HEIC 사진은 이 브라우저에서 열 수 없어요. 휴대폰 카메라 설정에서 \'높은 호환성(JPG)\'으로 바꾸거나 카메라로 바로 찍어 주세요.'
+        : '사진을 열 수 없어요. 다른 사진을 골라 주세요.');
+    } finally {
+      if (url) URL.revokeObjectURL(url);
+    }
   }
   const w = source.width || source.naturalWidth;
   const h = source.height || source.naturalHeight;
@@ -23,7 +43,7 @@ export async function prepareImage(file) {
 
 export function canvasToBlob(canvas, quality = 0.9) {
   return new Promise((resolve, reject) => {
-    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('사진을 변환하지 못했어요.'))), 'image/jpeg', quality);
+    canvas.toBlob((b) => (b ? resolve(b) : reject(imageError('사진을 변환하지 못했어요. 다시 시도해 주세요.'))), 'image/jpeg', quality);
   });
 }
 

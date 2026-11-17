@@ -66,3 +66,53 @@ def test_load_image_roundtrip():
     img = draw_plant(0.3, "basil", seed=6)
     loaded = load_image(jpeg(img))
     assert loaded.shape == img.shape
+
+
+# ---- 잎 색 · 가는 줄기 · 조명 색 보정 ----
+
+def paint_lower_leaves(img, res, bgr, frac=0.55):
+    """분석된 식물 영역 중 아래쪽(경계 상자 위에서 frac 아래)을 bgr 색으로 칠해요."""
+    x, y, w, h = res.bbox
+    scale = img.shape[0] / res.img_h
+    big = cv2.resize(res.mask, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_NEAREST) > 0
+    rows = np.arange(img.shape[0])[:, None]
+    out = img.copy()
+    out[big & (rows > (y + h * frac) * scale)] = bgr
+    return out
+
+
+def test_yellow_leaves_are_kept_and_measured():
+    """노랗게 변한 잎도 식물 면적에 들어가고, 노란 비율·위치를 잡아요 (예전에는 면적에서 빠졌어요)."""
+    analyzer = PlantAnalyzer()
+    img = draw_plant(0.5, "basil", seed=7)
+    healthy = analyzer.analyze(img)
+    assert healthy.color["yellow"] < 1
+    sick = analyzer.analyze(paint_lower_leaves(img, healthy, (40, 190, 215)))  # 진한 노랑
+    assert abs(sick.area_px - healthy.area_px) / healthy.area_px < 0.05
+    assert sick.color["yellow"] > 30
+    assert sick.color["yellow_low"] >= 80  # 아래쪽 잎이 노래졌어요
+    assert sick.color["hue"] < healthy.color["hue"]
+    # 노란 자(기준물)는 여전히 식물이 아니에요
+    assert sick.bbox[0] + sick.bbox[2] < int(img.shape[1] * 0.86)
+
+
+def test_white_balance_keeps_leaf_color_stable():
+    """조명 색이 달라도(푸른빛·누런빛) 잎 색상각이 거의 같아야 해요."""
+    img = draw_plant(0.5, "basil", seed=8)
+    base = PlantAnalyzer().analyze(img).color["hue"]
+    for gains in ((1.0, 0.95, 0.82), (0.8, 0.92, 0.98)):  # BGR: 푸른 조명, 누런 조명 (실제 사진 정도)
+        cast = np.clip(img.astype(np.float32) * gains, 0, 255).astype(np.uint8)
+        res = PlantAnalyzer().analyze(cast)
+        assert res.color["wb"] is True
+        assert abs(res.color["hue"] - base) < 3, (gains, res.color["hue"], base)
+
+
+def test_thin_weak_green_stem_counts_in_side_photo():
+    """잎 아래의 연한 줄기(a* ≈ -5)도 식물 높이에 들어가요 (위에서 찍은 사진에서는 이어 붙이지 않아요)."""
+    img = np.full((1280, 720, 3), 225, np.uint8)
+    cv2.ellipse(img, (360, 420), (130, 90), 0, 0, 360, (40, 150, 60), -1)  # 진한 초록 잎
+    cv2.line(img, (360, 500), (360, 700), (70, 100, 100), 9)  # 연한 줄기 (화분까지 약 200px)
+    side = PlantAnalyzer().analyze(img)
+    top = PlantAnalyzer().analyze(img, view="top")
+    assert side.bbox[1] + side.bbox[3] > 690
+    assert top.bbox[1] + top.bbox[3] < 560

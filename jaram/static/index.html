@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="description" content="사진으로 식물의 생장량을 비교하고 관리 방법을 추천하는 앱">
   <meta name="theme-color" content="#F2F4F6">
+  <meta name="color-scheme" content="light dark">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -18,10 +19,12 @@
   <link rel="stylesheet" href="/static/css/app.css">
   <script>
     // 화면이 깜빡이지 않도록 저장된 테마를 가장 먼저 적용
-    try {
-      var t = localStorage.getItem('jaram-theme');
-      if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
-    } catch (e) {}
+    var t = null;
+    try { t = localStorage.getItem('jaram-theme'); } catch (e) {}
+    if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+    // 상태 표시줄 색도 처음부터 테마에 맞춤 (theme.js 가 이후 변경을 반영)
+    var dark = t === 'dark' || (t !== 'light' && window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches);
+    if (dark) document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0E0F11');
   </script>
 </head>
 <body>

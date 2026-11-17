@@ -104,6 +104,20 @@ def test_settings_roundtrip_and_reanalyze(client):
     assert client.post("/api/settings/reset").get_json()["thresholds"]["species"]["basil"]["soil_min"] == 30
 
 
+def test_species_thresholds_keep_decimals(client):
+    # 기준 제안값(17.5℃ 등)이 저장할 때 반올림되면 안 됨. 공통 기준·HSV는 정수 유지.
+    s = client.get("/api/settings").get_json()["thresholds"]
+    s["species"]["basil"]["temp_min"] = 17.5
+    s["species"]["basil"]["soil_min"] = 25.0
+    s["species"]["basil"]["hsv_lower"] = [30.4, 40, 35]
+    s["general"]["rate_window"] = 2.6
+    saved = client.put("/api/settings", json={"thresholds": s}).get_json()["thresholds"]
+    assert saved["species"]["basil"]["temp_min"] == 17.5
+    assert saved["species"]["basil"]["soil_min"] == 25 and isinstance(saved["species"]["basil"]["soil_min"], int)
+    assert saved["species"]["basil"]["hsv_lower"] == [30, 40, 35]
+    assert saved["general"]["rate_window"] == 3
+
+
 def test_report_and_csv(client):
     pid = make_plant(client)["id"]
     upload(client, pid, 0.3, "2026-10-01T09:00")

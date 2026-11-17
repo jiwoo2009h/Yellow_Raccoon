@@ -1,5 +1,5 @@
 import { api } from '../api.js';
-import { h, topbar, field, segmented, toast, formValues } from '../ui.js';
+import { h, topbar, field, segmented, toast, formValues, skeleton, friendlyError, goBack } from '../ui.js';
 
 const SPECIES = [['basil', '바질'], ['lettuce', '상추'], ['other', '기타']];
 const PREFIX = { basil: ['바질', 'B'], lettuce: ['상추', 'L'], other: ['식물', 'P'] };
@@ -7,6 +7,9 @@ const PREFIX = { basil: ['바질', 'B'], lettuce: ['상추', 'L'], other: ['식�
 export async function plantFormView({ id }) {
   const screen = document.getElementById('screen');
   const editing = Boolean(id);
+  // 촬영 탭에서 식물이 없어 넘어온 경우: 등록이 끝나면 바로 촬영 화면으로
+  const thenCapture = new URLSearchParams(location.hash.split('?')[1] || '').get('then') === 'capture';
+  screen.append(topbar({ title: '' }), skeleton(90, 8), skeleton(260, 24));
   const [plant, list] = await Promise.all([editing ? api.plant(id) : null, editing ? null : api.plants()]);
   let species = plant?.species || 'basil';
 
@@ -31,19 +34,30 @@ export async function plantFormView({ id }) {
   const form = h('form', {
     onsubmit: async (e) => {
       e.preventDefault();
+      const btn = screen.querySelector('.cta .btn');
+      if (btn.disabled) return;
       const v = formValues(form);
       error.hidden = true;
-      const btn = screen.querySelector('.cta .btn');
+      if (!v.name) {
+        error.textContent = '이름을 입력해 주세요.';
+        error.hidden = false;
+        nameInput.focus();
+        return;
+      }
       btn.disabled = true;
+      btn.classList.add('is-loading');
       try {
         const body = { name: v.name, code: v.code, memo: v.memo, species };
         const saved = editing ? await api.updatePlant(id, body) : await api.createPlant(body);
         toast(editing ? '저장했어요' : `${saved.name}을(를) 등록했어요`);
-        location.replace(`#/plant/${saved.id}`);
+        if (!screen.isConnected) return;
+        if (editing) goBack(`#/plant/${saved.id}`); // 수정: 식물 화면으로 돌아가기 (기록이 두 번 쌓이지 않게)
+        else location.replace(thenCapture ? `#/plant/${saved.id}/capture` : `#/plant/${saved.id}`);
       } catch (err) {
-        error.textContent = err.message;
+        error.textContent = friendlyError(err);
         error.hidden = false;
         btn.disabled = false;
+        btn.classList.remove('is-loading');
       }
     },
   },

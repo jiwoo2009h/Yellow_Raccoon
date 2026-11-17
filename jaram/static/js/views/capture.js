@@ -1,6 +1,8 @@
 import { api } from '../api.js';
-import { h, icons, topbar, sheet, toast, relDays, isToday, goBack, skeleton } from '../ui.js';
-import { prepareImage, readExifDate, canvasToBlob } from '../image.js';
+import { h, icons, topbar, sheet, toast, relDays, isToday, goBack, skeleton, friendlyError, progressSheet, confirmSheet, dateTime, parseDate } from '../ui.js';
+import { prepareImage, readExifDate } from '../image.js';
+import { photoInfos, releaseInfos, dropZone } from '../bulk.js';
+import { openCamera, canUseLiveCamera } from '../camera.js';
 
 const STEPS = ['사진 크기를 맞추는 중', '초록색 식물 영역을 찾는 중', '높이·폭·면적을 계산하는 중', '지난 기록과 비교하는 중'];
 
@@ -9,7 +11,7 @@ export async function pickPlantAndCapture() {
   const { plants } = await api.plants();
   if (!plants.length) {
     toast('먼저 식물을 등록해 주세요');
-    location.hash = '#/plant/new';
+    location.hash = '#/plant/new?then=capture'; // 등록이 끝나면 바로 촬영 화면으로
     return;
   }
   if (plants.length === 1) {
@@ -21,6 +23,7 @@ export async function pickPlantAndCapture() {
     const tb = b.latest && isToday(b.latest.taken_at) ? 1 : 0;
     return ta - tb || a.id - b.id;
   });
+  let chosen = false;
   sheet((close) => [
     h('h2', { class: 'sheet-title' }, '어떤 식물을 찍을까요?'),
     h('p', { class: 'sheet-desc' }, '오늘 아직 찍지 않은 식물이 위에 있어요.'),
@@ -28,9 +31,14 @@ export async function pickPlantAndCapture() {
       const done = p.latest && isToday(p.latest.taken_at);
       return h('button', {
         class: 'list-item', type: 'button',
-        onclick: async () => { await close(); location.hash = `#/plant/${p.id}/capture`; },
+        onclick: async () => {
+          if (chosen) return;
+          chosen = true;
+          await close();
+          location.hash = `#/plant/${p.id}/capture`;
+        },
       },
-      h('div', { class: 'thumb', style: { width: '48px', height: '48px', borderRadius: '12px' } },
+      h('div', { class: 'thumb', style: { width: '48px', height: '48px', borderRadius: '13px' } },
         p.latest ? h('img', { src: p.latest.photo_url, alt: '' }) : h('span', { html: icons.sprout, style: { display: 'contents' } })),
       h('div', { class: 'grow' },
         h('div', { class: 'title' }, p.name, p.code ? h('span', { class: 'tag', style: { marginLeft: '6px' } }, p.code) : null),
@@ -45,20 +53,82 @@ export async function captureView({ id }) {
   screen.append(topbar({ title: '사진 찍기' }), skeleton(400, 8));
   const plant = await api.plant(id);
   const latest = plant.measurements[plant.measurements.length - 1];
-  const canLive = window.isSecureContext && navigator.mediaDevices?.getUserMedia;
-  let stream = null;
+  const canLive = canUseLiveCamera();
+  let cam = null;
   let busy = false;
+  let left = false; // 다른 화면으로 이동했는지
 
-  const stop = () => { stream?.getTracks().forEach((t) => t.stop()); stream = null; };
-
-  // 숨겨진 파일 입력: 카메라 앱 / 앨범
+  // 숨겨진 파일 입력: 카메라 앱 / 앨범 (앨범은 여러 장 고르기 가능)
   const camInput = h('input', { type: 'file', accept: 'image/*', capture: 'environment', hidden: true });
-  const albumInput = h('input', { type: 'file', accept: 'image/*', hidden: true });
-  const onFile = async (e) => {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (file) await submit(file, await readExifDate(file));
+  const albumInput = h('input', { type: 'file', accept: 'image/*', multiple: true, hidden: true });
+  const takeFiles = async (files) => {
+    const list = [...files];
+    if (list.length > 1) await bulkSubmit(list);
+    else if (list[0]) await submit(list[0], await readExifDate(list[0]));
   };
+  const onFile = async (e) => {
+    const files = [...(e.target.files || [])];
+    e.target.value = '';
+    await takeFiles(files);
+  };
+  // 넓은 화면에서는 사진을 화면에 끌어다 놓아도 돼요
+  const undrop = dropZone(screen, (files) => { if (!cam) takeFiles(files); });
+  const stop = () => { left = true; undrop(); cam?.close(); cam = null; };
+
+  /** 미리 찍어 둔 정면 사진 여러 장: 촬영 시각 순서로 하나씩 기록 (같은 시각 기록이 있으면 건너뜀) */
+  async function bulkSubmit(files) {
+    if (busy) return;
+    const infos = await photoInfos(files);
+    if (!infos.length) { toast('사진 파일만 올릴 수 있어요', { error: true }); return; }
+    const have = plant.measurements.map((m) => parseDate(m.taken_at).getTime());
+    const dup = (info) => have.some((t) => Math.abs(t - info.time.getTime()) < 60 * 1000);
+    const todo = infos.filter((i) => !dup(i));
+    const skipped = infos.length - todo.length;
+    try {
+      if (!todo.length) { toast('이미 같은 시각의 기록이 있어서 올릴 사진이 없어요'); return; }
+      const ok = await confirmSheet({
+        title: `사진 ${todo.length}장을 한꺼번에 기록할까요?`,
+        desc: `촬영 시각 순서로 하나씩 분석해서 기록해요 (${dateTime(todo[0].time)} ~ ${dateTime(todo[todo.length - 1].time)}).`
+          + (skipped ? ` 같은 시각의 기록이 이미 있는 ${skipped}장은 건너뛰어요.` : '')
+          + ' 촬영 시각 정보가 없는 사진은 파일 수정 시각을 써요.',
+        ok: `${todo.length}장 올리기`,
+      });
+      if (!ok || left) return;
+      busy = true;
+      const prog = progressSheet('사진을 분석하고 있어요', `0/${todo.length}장 · 화면을 닫지 말고 기다려 주세요`);
+      const failed = [];
+      let done = 0;
+      for (const info of todo) {
+        try {
+          const blob = await prepareImage(info.file);
+          await api.upload(plant.id, blob, info.takenAt);
+          done += 1;
+        } catch (err) {
+          failed.push(`${info.name} (${dateTime(info.time)}): ${friendlyError(err)}`);
+        }
+        prog.update(`${done + failed.length}/${todo.length}장 · 화면을 닫지 말고 기다려 주세요`);
+      }
+      prog.close();
+      busy = false;
+      if (left || !screen.isConnected) { toast(`${done}장을 기록했어요`); return; }
+      cam?.close();
+      cam = null;
+      if (!failed.length) {
+        toast(`${done}장을 기록했어요`);
+        location.replace(`#/plant/${plant.id}`);
+        return;
+      }
+      sheet((close) => [
+        h('h2', { class: 'sheet-title' }, `${done}장을 기록했어요 · ${failed.length}장은 기록하지 못했어요`),
+        h('ul', { class: 'algo-list' }, failed.map((f) => h('li', null, f))),
+        h('p', { class: 'caption' }, '식물을 찾지 못한 사진은 분석 영역을 지정하거나 설정에서 색상 범위를 조정한 뒤 다시 올려 주세요.'),
+        h('div', { class: 'actions' }, h('button', { class: 'btn btn-primary', type: 'button', onclick: () => close() }, '확인')),
+      ], { onClose: () => { if (!left) location.replace(`#/plant/${plant.id}`); } });
+    } finally {
+      busy = false;
+      releaseInfos(infos);
+    }
+  }
   camInput.addEventListener('change', onFile);
   albumInput.addEventListener('change', onFile);
 
@@ -72,13 +142,17 @@ export async function captureView({ id }) {
       let takenAt = null;
       if (exifDate && Math.abs(new Date(exifDate) - Date.now()) > 10 * 60 * 1000) takenAt = exifDate;
       const res = await api.upload(plant.id, blob, takenAt);
-      stop();
       overlay.remove();
-      location.hash = `#/m/${res.measurement.id}?new=1`;
+      if (left || !screen.isConnected) { toast('사진을 저장했어요'); return; } // 그사이 다른 화면으로 이동함
+      cam?.close();
+      cam = null;
+      // replace: 결과 화면에서 뒤로 가면 카메라가 다시 열리지 않고 식물 화면으로 가도록
+      location.replace(`#/m/${res.measurement.id}?new=1`);
     } catch (err) {
       overlay.remove();
       busy = false;
-      errorSheet(err.message);
+      if (left) return;
+      errorSheet(err);
     }
   }
 
@@ -94,70 +168,34 @@ export async function captureView({ id }) {
     return el;
   }
 
-  function errorSheet(message) {
+  function errorSheet(err) {
+    // 서버가 사진을 받아 분석했는데 실패한 경우에만 촬영 요령을 보여 줘요 (연결·파일 문제와 구분)
+    const analysisFailed = err && err.status && err.status >= 400 && err.status < 500 && err.status !== 413;
     sheet((close) => [
-      h('h2', { class: 'sheet-title' }, '분석하지 못했어요'),
-      h('p', { class: 'sheet-desc' }, message),
-      h('ul', { class: 'tips', style: { marginBottom: '8px' } },
+      h('h2', { class: 'sheet-title' }, analysisFailed ? '식물을 찾지 못했어요' : '사진을 올리지 못했어요'),
+      h('p', { class: 'sheet-desc' }, friendlyError(err)),
+      analysisFailed ? h('ul', { class: 'tips', style: { marginBottom: '8px' } },
         h('li', null, h('span', { class: 'n' }, '1'), '식물이 사진 가운데에 크게 나오게 찍어 주세요.'),
         h('li', null, h('span', { class: 'n' }, '2'), '배경에 초록색 물건이 없도록 해 주세요.'),
-        h('li', null, h('span', { class: 'n' }, '3'), '그래도 안 되면 설정에서 색상(HSV) 범위를 넓혀 보세요.')),
-      h('div', { class: 'actions' }, h('button', { class: 'btn btn-primary', onclick: () => close() }, '다시 찍기')),
+        h('li', null, h('span', { class: 'n' }, '3'), '그래도 안 되면 설정에서 색상(HSV) 범위를 넓혀 보세요.')) : null,
+      h('div', { class: 'actions' }, h('button', { class: 'btn btn-primary', onclick: () => close() }, analysisFailed ? '다시 찍기' : '확인')),
     ]);
   }
 
   // ------------------------------------------------------------ 실시간 카메라 (HTTPS 일 때)
   async function liveMode() {
-    const video = h('video', { autoplay: true, playsinline: true, muted: true });
-    video.muted = true;
-    let facing = 'environment';
-    const start = async () => {
-      stop();
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: facing, width: { ideal: 1920 }, height: { ideal: 1440 } }, audio: false,
-      });
-      video.srcObject = stream;
-      await video.play().catch(() => {});
-    };
-    await start();
-
-    const ghost = latest ? h('img', { class: 'ghost', src: latest.photo_url, alt: '' }) : null;
-    const finder = h('div', { class: 'viewfinder' }, video, ghost,
-      h('span', { html: '<svg class="grid-lines" viewBox="0 0 3 3" preserveAspectRatio="none"><path d="M1 0v3M2 0v3M0 1h3M0 2h3" stroke="rgba(255,255,255,.28)" stroke-width=".01" vector-effect="non-scaling-stroke"/></svg>', style: { display: 'contents' } }),
-      h('div', { class: 'hint' }, latest ? '흐린 지난 사진에 화분을 맞춰 주세요' : '식물 전체와 자가 함께 나오게 찍어 주세요'));
-    const slider = latest ? h('label', { class: 'ghost-slider' }, '겹쳐 보기',
-      h('input', {
-        type: 'range', min: 0, max: 70, value: 35, 'aria-label': '지난 사진 투명도',
-        oninput: (e) => finder.style.setProperty('--ghost', e.target.value / 100),
-      })) : null;
-
-    const shoot = async () => {
-      if (!video.videoWidth) return;
-      const c = document.createElement('canvas');
-      c.width = video.videoWidth;
-      c.height = video.videoHeight;
-      c.getContext('2d').drawImage(video, 0, 0);
-      const blob = await canvasToBlob(c, 0.92);
-      await submit(blob, null);
-    };
-
-    const cam = h('div', { class: 'camera' },
-      h('div', { class: 'camera-top' },
-        h('button', { class: 'icon-btn', 'aria-label': '닫기', html: icons.close, onclick: () => { stop(); goBack(`#/plant/${plant.id}`); } }),
-        h('div', { class: 'camera-title' }, plant.name),
-        h('span', { class: 'topbar-spacer' })),
-      finder,
-      slider,
-      h('div', { class: 'camera-bottom' },
-        h('div', { class: 'cam-side' }, h('button', { class: 'icon-btn', 'aria-label': '앨범에서 선택', html: icons.image, onclick: () => albumInput.click() }), '앨범'),
-        h('button', { class: 'shutter', 'aria-label': '촬영', onclick: shoot }),
-        h('div', { class: 'cam-side' }, h('button', {
-          class: 'icon-btn', 'aria-label': '카메라 전환', html: icons.flip,
-          onclick: async () => { facing = facing === 'environment' ? 'user' : 'environment'; await start().catch(() => {}); },
-        }), '전환')),
-      camInput, albumInput);
-    screen.className = 'screen flush';
-    screen.replaceChildren(cam);
+    fileMode(null); // 카메라를 닫으면 보이는 화면
+    const opened = await openCamera({
+      title: plant.name,
+      hint: latest ? '흐린 지난 사진에 화분을 맞춰 주세요' : '식물 전체와 자가 함께 나오게 찍어 주세요',
+      ghostUrl: latest ? latest.photo_url : null,
+      onShot: (blob) => submit(blob, null),
+      onAlbum: async (file) => submit(file, await readExifDate(file)),
+      onClose: () => { cam = null; goBack(`#/plant/${plant.id}`); },
+    });
+    // 카메라 권한을 묻는 사이 다른 화면으로 이동했으면 바로 닫기
+    if (left || !screen.isConnected) { opened.close(); return; }
+    cam = opened;
   }
 
   // ------------------------------------------------------------ 기본 모드: 휴대폰 카메라 앱 사용
@@ -175,10 +213,13 @@ export async function captureView({ id }) {
           h('li', null, h('span', { class: 'n' }, '1'), '챔버에 표시한 같은 위치·높이에서 찍어요.'),
           h('li', null, h('span', { class: 'n' }, '2'), '화분 옆에 자를 세워 두면 cm 단위로 바꿀 수 있어요.'),
           h('li', null, h('span', { class: 'n' }, '3'), '식물 전체가 나오게, 배경은 단순하게 찍어요.'),
-          h('li', null, h('span', { class: 'n' }, '4'), '조명 조건을 매번 같게 맞춰 주세요.'))),
-      reason ? h('p', { class: 'caption', style: { margin: '12px 4px 0' } }, reason) : null,
+          h('li', null, h('span', { class: 'n' }, '4'), '조명 조건을 매번 같게 맞춰 주세요.')),
+        h('p', { class: 'caption', style: { margin: '14px 0 0' } }, '미리 찍어 둔 사진은 앨범에서 여러 장 고르거나 이 화면에 끌어다 놓으면, 촬영 시각 순서로 한꺼번에 기록돼요.')),
+      reason ? h('div', { class: 'notice', style: { marginTop: '12px' } },
+        h('span', { html: icons.info, style: { display: 'contents' } }), h('span', { class: 'grow' }, reason)) : null,
       h('div', { class: 'cta' }, h('div', { class: 'btn-row' },
-        h('button', { class: 'btn btn-secondary', style: { flex: '0 0 34%' }, onclick: () => albumInput.click() }, '앨범'),
+        h('button', { class: 'btn btn-secondary', style: { flex: '0 0 34%' }, onclick: () => albumInput.click() },
+          h('span', { html: icons.image, style: { display: 'contents' } }), '앨범'),
         h('button', { class: 'btn btn-primary', onclick: () => camInput.click() },
           h('span', { html: icons.camera, style: { display: 'contents' } }), '카메라로 찍기'))),
       camInput, albumInput,
@@ -190,7 +231,7 @@ export async function captureView({ id }) {
     try {
       await liveMode();
     } catch (err) {
-      fileMode('카메라를 바로 열 수 없어 휴대폰 카메라 앱으로 찍어요. (브라우저에서 카메라 권한을 허용하면 지난 사진을 겹쳐 보며 찍을 수 있어요)');
+      if (!left) fileMode('카메라를 바로 열 수 없어 휴대폰 카메라 앱으로 찍어요. (브라우저에서 카메라 권한을 허용하면 지난 사진을 겹쳐 보며 찍을 수 있어요)');
     }
   } else {
     fileMode(!window.isSecureContext ? 'HTTPS로 접속하면(python app.py --https) 지난 사진을 겹쳐 보면서 찍을 수 있어요.' : null);

@@ -1,0 +1,5 @@
+# 배포 서버용 (테스트·HTTPS 개발 도구 제외, 용량 절약)
+flask>=3.0
+opencv-python-headless>=4.8
+numpy>=1.26
+pillow>=10.0

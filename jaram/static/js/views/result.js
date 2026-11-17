@@ -1,8 +1,10 @@
 import { api } from '../api.js';
 import {
-  h, icons, topbar, fmt, deltaEl, areaUnit, dateTime, daysText, segmented, field, numberInput, skeleton, toast,
-  confirmSheet, toLocalInput, formValues, timeShort, statusBadge, parseDate,
+  h, icons, topbar, fmt, signed, deltaEl, areaUnit, dateTime, daysText, segmented, field, numberInput, skeleton, toast,
+  confirmSheet, toLocalInput, formValues, timeShort, statusBadge, parseDate, withBusy, checkNumbers, goBack,
+  multiChips, toggleChips,
 } from '../ui.js';
+import { SIGNS, SOIL_STATES } from '../sheets.js';
 
 export async function resultView({ id }) {
   const screen = document.getElementById('screen');
@@ -63,6 +65,17 @@ export async function resultView({ id }) {
         h('div', null, h('div', { class: 'k' }, '투영 면적'), h('div', { class: 'v' }, `${fmt(m.area, digits)}${areaUnit(unit)}`))));
   }
 
+  // 잎 색 (조명 색을 맞춘 대표색과 색상각)
+  if (m.color && m.color.hue !== null && m.color.hue !== undefined) {
+    const pc = prev?.color;
+    const diff = pc && pc.hue !== null && pc.hue !== undefined ? m.color.hue - pc.hue : null;
+    summary.append(h('div', { class: 'leaf-line' },
+      h('span', { class: 'leaf-dot', style: { background: m.color.rgb || 'var(--surface-3)' }, 'aria-hidden': 'true' }),
+      h('span', { class: 'grow' }, h('b', null, '잎 색 '), `색상각 ${fmt(m.color.hue, 1)}°`,
+        m.color.yellow >= 1 ? ` · 노란 쪽 ${fmt(m.color.yellow, 0)}%` : ''),
+      diff !== null ? h('span', { class: 'caption' }, `지난 기록 ${signed(diff, 1)}°`) : null));
+  }
+
   const warnings = m.warnings?.length
     ? h('div', { class: 'notice warn', style: { marginTop: '12px' } },
       h('span', { html: icons.warn, style: { display: 'contents' } }),
@@ -72,8 +85,10 @@ export async function resultView({ id }) {
   // ------------------------------------------------------------ 환경·직접 측정 입력
   const env = m.env || {};
   const sug = !m.env && data.suggest_env ? data.suggest_env : null;
+  // 사진과 함께 기록하는 식물 상태 (특이사항·흙 만져 보기)
+  const obs = { signs: data.observation?.signs || [], soil_state: data.observation?.soil_state || null };
   const val = (k) => env[k] ?? (sug && k !== 'soil' ? sug[k] : null);
-  const form = h('form', { class: 'card', style: { marginTop: '12px' }, onsubmit: (e) => { e.preventDefault(); save(); } },
+  const form = h('form', { class: 'card', style: { marginTop: '12px' }, onsubmit: (e) => { e.preventDefault(); save(); }, oninput: () => { dirty = true; } },
     h('h2', { class: 'card-title' }, '환경 기록'),
     h('p', { class: 'card-sub', style: { marginBottom: '16px' } }, '생장 변화와 환경을 함께 보고 관리 방법을 추천해요. 모르는 값은 비워 두세요.'),
     sug ? h('div', { class: 'notice accent', style: { marginBottom: '16px' } },
@@ -85,6 +100,12 @@ export async function resultView({ id }) {
     h('div', { class: 'field-row' },
       field('토양 수분', numberInput({ name: 'soil', unit: '%', value: val('soil') })),
       field('조도', numberInput({ name: 'lux', unit: 'lux', value: val('lux') }))),
+    h('h2', { class: 'card-title', style: { marginTop: '28px' } }, '식물 상태 (선택)'),
+    h('p', { class: 'card-sub', style: { marginBottom: '16px' } }, '눈에 띄는 점이 있으면 골라 주세요. 생장 변화·급수 기록과 함께 보고 관리 방법을 추천해요.'),
+    field('특이사항', multiChips(SIGNS, obs.signs, (v) => { obs.signs = v; dirty = true; })),
+    h('div', { style: { height: '16px' } }),
+    field('흙 상태', toggleChips(SOIL_STATES, obs.soil_state, (v) => { obs.soil_state = v; dirty = true; }),
+      '흙 표면을 손가락으로 만져 보고 골라 주세요.'),
     h('h2', { class: 'card-title', style: { marginTop: '28px' } }, '직접 측정 (선택)'),
     h('p', { class: 'card-sub', style: { marginBottom: '16px' } }, '자로 잰 값을 넣으면 리포트에서 영상 분석의 오차를 확인할 수 있어요.'),
     h('div', { class: 'field-row' },
@@ -98,11 +119,15 @@ export async function resultView({ id }) {
     h('div', { style: { height: '16px' } }),
     field('촬영 시각', h('input', { class: 'input', type: 'datetime-local', name: 'taken_at', value: toLocalInput(m.taken_at) })));
 
-  async function save() {
-    const v = formValues(form);
-    const btn = screen.querySelector('.cta .btn-primary');
-    if (btn) btn.disabled = true;
-    try {
+  let dirty = false;
+  const saveBtn = h('button', { class: 'btn btn-primary', type: 'button', onclick: () => save() }, '저장하기');
+  const retakeBtn = h('button', { class: 'btn btn-secondary', type: 'button', style: { flex: '0 0 34%' }, onclick: () => remove(true) }, '다시 찍기');
+
+  // 엔터키(onsubmit)와 버튼이 모두 같은 잠금을 거쳐서 두 번 저장되지 않아요
+  function save() {
+    if (!checkNumbers(form)) return undefined;
+    return withBusy(saveBtn, async () => {
+      const v = formValues(form);
       await api.updateMeasurement(m.id, {
         env: { temp: v.temp, humidity: v.humidity, soil: v.soil, lux: v.lux },
         manual_height_cm: v.manual_height_cm,
@@ -110,23 +135,41 @@ export async function resultView({ id }) {
         leaf_count: v.leaf_count,
         note: v.note,
         taken_at: v.taken_at,
+        observation: { signs: obs.signs, soil_state: obs.soil_state },
       });
+      dirty = false;
       toast(isNew ? '기록을 저장했어요' : '수정했어요');
-      location.hash = `#/plant/${plant.id}`;
-    } catch (err) {
-      toast(err.message, { error: true });
-      if (btn) btn.disabled = false;
+      if (screen.isConnected) goBack(`#/plant/${plant.id}`);
+    });
+  }
+
+  let removing = false;
+  async function remove(andRetake) {
+    if (removing) return;
+    removing = true;
+    try {
+      const ok = await confirmSheet(andRetake
+        ? { title: '이 사진을 지우고 다시 찍을까요?', desc: '방금 찍은 사진과 분석 결과는 지워져요.', ok: '다시 찍기' }
+        : { title: '이 기록을 지울까요?', desc: '사진과 분석 결과가 함께 지워져요.', ok: '지우기', danger: true });
+      if (!ok) return;
+      await withBusy(andRetake ? retakeBtn : null, async () => {
+        await api.deleteMeasurement(m.id);
+        dirty = false;
+        if (andRetake) location.replace(`#/plant/${plant.id}/capture`);
+        else { toast('기록을 지웠어요'); goBack(`#/plant/${plant.id}`); }
+      });
+    } finally {
+      removing = false;
     }
   }
 
-  async function remove(andRetake) {
-    if (!andRetake) {
-      const ok = await confirmSheet({ title: '이 기록을 지울까요?', desc: '사진과 분석 결과가 함께 지워져요.', ok: '지우기', danger: true });
+  async function leave() {
+    // 새 결과에서 값을 입력해 놓고 뒤로 가면 저장할지 물어봐요 (사진은 이미 저장됨)
+    if (dirty) {
+      const ok = await confirmSheet({ title: '입력한 값을 저장하지 않고 나갈까요?', desc: '사진과 분석 결과는 이미 저장돼 있어요. 환경·식물 상태·측정값만 저장되지 않아요.', ok: '저장하지 않고 나가기' });
       if (!ok) return;
     }
-    await api.deleteMeasurement(m.id);
-    if (andRetake) location.replace(`#/plant/${plant.id}/capture`);
-    else { toast('기록을 지웠어요'); location.hash = `#/plant/${plant.id}`; }
+    goBack(`#/plant/${plant.id}`);
   }
 
   const status = h('div', { class: 'notice', style: { marginTop: '12px', alignItems: 'center' } },
@@ -136,17 +179,14 @@ export async function resultView({ id }) {
   screen.replaceChildren(...[
     topbar({
       title: isNew ? `${plant.name} 분석 결과` : dateTime(m.taken_at),
-      onBack: () => { location.hash = `#/plant/${plant.id}`; },
+      onBack: leave,
       right: h('button', { class: 'icon-btn', 'aria-label': '기록 삭제', html: icons.trash, onclick: () => remove(false) }),
     }),
-    heroEl, warnings, summary,
-    isNew ? null : status,
-    form,
+    // 넓은 화면: 분석 사진 | 요약·입력
+    h('div', { class: 'split' },
+      h('div', null, heroEl, warnings),
+      h('div', { class: 'split-side' }, summary, isNew ? null : status, form)),
     h('p', { class: 'footer-note' }, `${plant.name} · ${parseDate(m.taken_at).toLocaleDateString('ko-KR')} · ${data.index + 1}번째 기록`),
-    h('div', { class: 'cta' }, isNew
-      ? h('div', { class: 'btn-row' },
-        h('button', { class: 'btn btn-secondary', style: { flex: '0 0 34%' }, onclick: () => remove(true) }, '다시 찍기'),
-        h('button', { class: 'btn btn-primary', onclick: () => save() }, '저장하기'))
-      : h('button', { class: 'btn btn-primary', onclick: () => save() }, '저장하기')),
+    h('div', { class: 'cta' }, isNew ? h('div', { class: 'btn-row' }, retakeBtn, saveBtn) : saveBtn),
   ].filter(Boolean));
 }

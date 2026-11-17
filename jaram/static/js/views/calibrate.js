@@ -2,12 +2,13 @@
 // (계획서 '파. 픽셀 크기와 실제 크기의 환산')
 
 import { api } from '../api.js';
-import { h, icons, topbar, field, numberInput, toast, fmt, goBack, confirmSheet, dateShort } from '../ui.js';
+import { h, icons, topbar, field, numberInput, toast, fmt, goBack, confirmSheet, dateShort, skeleton, withBusy, markInvalid, clearInvalid } from '../ui.js';
 
 const NS = 'http://www.w3.org/2000/svg';
 
 export async function calibrateView({ id }) {
   const screen = document.getElementById('screen');
+  screen.append(topbar({ title: '크기 보정' }), skeleton(80, 8), skeleton(420));
   const plant = await api.plant(id);
   const ms = plant.measurements;
   if (!ms.length) {
@@ -32,7 +33,9 @@ export async function calibrateView({ id }) {
   const stage = h('div', { class: 'calib' }, img, svg, loupe);
   const step = h('p', { class: 'card-sub', style: { margin: 0 } });
   const readout = h('div', { class: 'caption', style: { marginTop: '8px' } });
-  const lengthInput = numberInput({ name: 'length', unit: 'cm', value: cal?.length_cm ?? 10, placeholder: '10' });
+  const lengthInput = numberInput({ name: 'length', unit: 'cm', value: cal?.length_cm ?? 10, placeholder: '10', min: 0.1 });
+  const lengthEl = lengthInput.querySelector('input');
+  const lengthValue = () => { const v = Number(lengthEl.value); return lengthEl.value !== '' && Number.isFinite(v) && v > 0 ? v : null; };
 
   const scale = () => stage.getBoundingClientRect().width / W;
 
@@ -55,10 +58,10 @@ export async function calibrateView({ id }) {
         : '점을 끌어서 눈금에 정확히 맞춘 뒤, 두 점 사이의 실제 길이를 입력하세요.';
     if (pts.length === 2) {
       const px = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
-      const len = Number(lengthInput.querySelector('input').value);
-      readout.textContent = len > 0 ? `두 점 사이 ${fmt(px, 0)}px → 1cm = ${fmt(px / len, 1)}px` : `두 점 사이 ${fmt(px, 0)}px`;
+      const len = lengthValue();
+      readout.textContent = len ? `두 점 사이 ${fmt(px, 0)}px → 1cm = ${fmt(px / len, 1)}px` : `두 점 사이 ${fmt(px, 0)}px · 실제 길이를 입력해 주세요`;
     } else readout.textContent = '';
-    saveBtn.disabled = pts.length !== 2;
+    if (!saveBtn.dataset.busy) saveBtn.disabled = pts.length !== 2;
   }
 
   function toImage(e) {
@@ -105,19 +108,26 @@ export async function calibrateView({ id }) {
   const end = () => { active = null; loupe.hidden = true; };
   stage.addEventListener('pointerup', end);
   stage.addEventListener('pointercancel', end);
-  lengthInput.querySelector('input').addEventListener('input', draw);
+  lengthEl.addEventListener('input', draw);
 
   const saveBtn = h('button', {
     class: 'btn btn-primary', disabled: true,
-    onclick: async () => {
-      try {
+    onclick: () => {
+      const len = lengthValue();
+      if (!len) {
+        markInvalid(lengthEl, '두 점 사이의 실제 길이를 0보다 크게 입력해 주세요');
+        lengthEl.focus();
+        return;
+      }
+      clearInvalid(lengthEl);
+      withBusy(saveBtn, async () => {
         await api.updatePlant(id, { calibration: {
           x1: pts[0].x, y1: pts[0].y, x2: pts[1].x, y2: pts[1].y,
-          length_cm: Number(lengthInput.querySelector('input').value), measurement_id: m.id,
+          length_cm: len, measurement_id: m.id,
         } });
         toast('크기 보정을 저장했어요. 이제 cm 단위로 보여요');
-        goBack(`#/plant/${id}`);
-      } catch (err) { toast(err.message, { error: true }); }
+        if (screen.isConnected) goBack(`#/plant/${id}`);
+      });
     },
   }, '보정 저장');
 
@@ -133,12 +143,16 @@ export async function calibrateView({ id }) {
       readout,
       cal ? h('button', {
         class: 'btn btn-text', style: { marginTop: '8px' },
-        onclick: async () => {
+        onclick: async (e) => {
+          const btn = e.currentTarget;
+          if (btn.disabled) return;
           const ok = await confirmSheet({ title: '보정을 해제할까요?', desc: '다시 픽셀 단위로 표시돼요.', ok: '해제' });
           if (!ok) return;
-          await api.updatePlant(id, { calibration: null });
-          toast('보정을 해제했어요');
-          goBack(`#/plant/${id}`);
+          await withBusy(btn, async () => {
+            await api.updatePlant(id, { calibration: null });
+            toast('보정을 해제했어요');
+            if (screen.isConnected) goBack(`#/plant/${id}`);
+          });
         },
       }, '보정 해제') : null),
     h('div', { class: 'cta' }, saveBtn));

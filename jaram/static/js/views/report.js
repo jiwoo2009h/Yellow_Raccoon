@@ -8,7 +8,7 @@ export async function reportView() {
     h('h1', { class: 'large-title' }, '리포트'),
     h('p', { class: 'subtitle' }, '식물별 생장을 한눈에 비교해요')));
   screen.append(head, skeleton(300, 16), skeleton(200));
-  const data = await api.report();
+  const [data, val] = await Promise.all([api.report(), api.validation().catch(() => null)]);
   const plants = data.plants;
   screen.replaceChildren(head);
 
@@ -49,9 +49,30 @@ export async function reportView() {
       chartBox));
   draw();
 
+  // ------------------------------------------------------------ 3D 부피 곡선
+  if (plants.some((p) => (p.scans || []).length >= 2)) {
+    screen.append(h('h2', { class: 'section-title' }, '3D 부피 곡선'),
+      h('section', { class: 'card' },
+        h('p', { class: 'card-sub', style: { marginBottom: '12px' } }, '여러 각도로 찍은 3D 측정의 부피를 첫 측정 대비 %로 비교해요. 잎이 앞뒤로 자라는 변화까지 반영돼요.'),
+        lineChart({
+          series: plants.map((p, i) => ({
+            name: p.name, color: colorOf(i),
+            points: (p.scans || []).map((sc) => ({ x: Math.round(sc.day * 10) / 10, y: sc.volume_pct })),
+          })),
+          xTick: (x) => `${fmt(x, 0)}일`,
+          tipTitle: (x) => `첫 3D 측정 후 ${fmt(x, 1)}일`,
+          yFormat: (v) => `${signed(v, 0)}%`,
+          yZero: true,
+          height: 220,
+          ariaLabel: '식물별 3D 부피 변화율 비교 그래프',
+          tableHead: '경과일',
+        }),
+        h('a', { class: 'btn btn-text', href: '/api/export_scans.csv', download: '', style: { marginTop: '4px' } }, '3D 측정 CSV 받기')));
+  }
+
   // ------------------------------------------------------------ 식물별 요약
   screen.append(h('h2', { class: 'section-title' }, '식물별 요약'));
-  screen.append(h('div', { class: 'list' }, plants.map((p, i) => {
+  screen.append(h('div', { class: 'list grid-2' }, plants.map((p, i) => {
     const total = p.summary?.total;
     const recent = p.summary?.recent?.area?.pct_per_day;
     return h('a', { class: 'list-item', href: `#/plant/${p.id}` },
@@ -64,6 +85,19 @@ export async function reportView() {
           recent !== null && recent !== undefined ? ` · 최근 ${signed(recent)}%/일` : '')),
       statusBadge(p.status, p.status_label));
   })));
+
+  // ------------------------------------------------------------ 추천 효과 검증
+  if (val && val.summary.occurrences) {
+    const v = val.summary;
+    const pctText = (x) => (x === null || x === undefined ? '–' : `${fmt(x * 100, 0)}%`);
+    screen.append(h('h2', { class: 'section-title' }, '추천 효과 검증'),
+      h('a', { class: 'card card-link', href: '#/report/validation' },
+        h('div', { class: 'grow' },
+          h('div', { class: 'card-title', style: { margin: 0 } }, '추천을 따르면 나아졌을까요?'),
+          h('p', { class: 'card-sub', style: { margin: '4px 0 0' } },
+            `추천 ${v.occurrences}건 · 행동 추천 따른 비율 ${pctText(v.follow_rate)} · 관리 필요 → 회복 ${pctText(v.care_recovered)}`)),
+        h('span', { class: 'chev', html: icons.chevron, style: { display: 'contents' } })));
+  }
 
   // ------------------------------------------------------------ 분석 정확도
   const acc = data.accuracy;

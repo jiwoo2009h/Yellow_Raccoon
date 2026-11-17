@@ -9,7 +9,7 @@ import { resultView } from './views/result.js';
 import { plantFormView } from './views/plantForm.js';
 import { calibrateView } from './views/calibrate.js';
 import { reportView } from './views/report.js';
-import { settingsView, speciesSettingsView, generalSettingsView, algorithmView } from './views/settings.js';
+import { settingsView, speciesSettingsView, generalSettingsView, symptomSettingsView, algorithmView } from './views/settings.js';
 
 const routes = [
   ['/', homeView, 'home'],
@@ -17,6 +17,7 @@ const routes = [
   ['/settings', settingsView, 'settings'],
   ['/settings/species/:key', speciesSettingsView],
   ['/settings/general', generalSettingsView],
+  ['/settings/symptoms', symptomSettingsView],
   ['/settings/algorithm', algorithmView],
   ['/plant/new', plantFormView],
   ['/plant/:id', plantView],

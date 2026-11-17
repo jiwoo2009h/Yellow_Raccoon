@@ -21,7 +21,8 @@ from flask import Flask, Response, g, jsonify, request, send_from_directory
 import db
 from growth import parse_time, with_units
 from recommend import evaluate
-from thresholds import SPECIES_KEYS, default_thresholds, merge_thresholds
+from symptoms import public_rules
+from thresholds import SPECIES_KEYS, apply_user_settings, default_thresholds, locked_changes
 from vision import PlantAnalyzer, PlantNotFoundError, encode_jpeg, encode_png, load_image
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -165,7 +166,8 @@ def create_app(data_dir=None):
 
     # ---------------- 공통 로직 ----------------
     def thresholds():
-        return merge_thresholds(db.get_setting(conn(), "thresholds"))
+        # 추천 규칙 기준은 thresholds.py(개발자)에서만, 이용자 설정은 HSV 색상 범위만 반영합니다.
+        return apply_user_settings(db.get_setting(conn(), "thresholds"))
 
     def species_cfg(th, species):
         return th["species"].get(species) or th["species"]["other"]
@@ -462,7 +464,7 @@ def create_app(data_dir=None):
             v = num(body["leaf_count"], 0, 999, "잎 수")
             fields["leaf_count"] = int(v) if v is not None else None
         if "note" in body:
-            fields["note"] = text(body["note"], 300, "메모")
+            fields["note"] = text(body["note"], 300, "특이 사항")
         if fields:
             sets = ", ".join(f"{k} = ?" for k in fields)
             conn().execute(f"UPDATE measurements SET {sets} WHERE id = ?", (*fields.values(), mid))
@@ -590,31 +592,30 @@ def create_app(data_dir=None):
         conn().commit()
         return jsonify(ok=True)
 
-    # ---------------- 설정(추천 기준) ----------------
+    # ---------------- 설정 ----------------
+    # 관리 행동 추천 규칙(기준값·특이 사항 키워드)은 개발자만 thresholds.py / symptoms.py 에서 바꿉니다.
+    # 이용자는 사진 분석용 식물 영역 색상(HSV) 범위만 바꿀 수 있어요.
     @app.get("/api/settings")
     def get_settings():
-        return jsonify(thresholds=thresholds(), defaults=default_thresholds())
+        return jsonify(thresholds=thresholds(), defaults=default_thresholds(), symptoms=public_rules())
 
     @app.put("/api/settings")
     def put_settings():
         body = request.get_json(silent=True) or {}
-        merged = merge_thresholds(body.get("thresholds"))
-        for key, cfg in merged["species"].items():
+        requested = body.get("thresholds")
+        if locked_changes(requested):
+            raise ApiError("관리 추천 규칙은 바꿀 수 없어요. 색상(HSV) 범위만 바꿀 수 있어요.", 403)
+        merged = apply_user_settings(requested)
+        for cfg in merged["species"].values():
             lo, hi = cfg["hsv_lower"], cfg["hsv_upper"]
             limits = (179, 255, 255)
             cfg["hsv_lower"] = [max(0, min(limits[i], lo[i])) for i in range(3)]
             cfg["hsv_upper"] = [max(0, min(limits[i], hi[i])) for i in range(3)]
             if any(cfg["hsv_lower"][i] >= cfg["hsv_upper"][i] for i in range(3)):
                 raise ApiError(f"{cfg['label']}: HSV 최솟값은 최댓값보다 작아야 해요.")
-            for a, b, label in (("temp_min", "temp_max", "온도"), ("humidity_min", "humidity_max", "습도"),
-                                ("soil_min", "soil_max", "토양 수분")):
-                if cfg[a] >= cfg[b]:
-                    raise ApiError(f"{cfg['label']}: {label} 최솟값은 최댓값보다 작아야 해요.")
-        gen = merged["general"]
-        gen["rate_window"] = max(1, min(10, gen["rate_window"]))
-        gen["env_lookback"] = max(1, min(10, gen["env_lookback"]))
-        gen["persist_count"] = max(1, min(gen["env_lookback"], gen["persist_count"]))
-        db.set_setting(conn(), "thresholds", merged)
+        stored = {"species": {k: {key: v[key] for key in ("hsv_lower", "hsv_upper")}
+                              for k, v in merged["species"].items()}}
+        db.set_setting(conn(), "thresholds", stored)
         conn().commit()
         return get_settings()
 

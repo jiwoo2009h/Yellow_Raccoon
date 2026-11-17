@@ -18,6 +18,7 @@
 from datetime import timedelta
 
 from growth import days_between, parse_time, summarize
+import symptoms as sx
 
 LEVEL_RANK = {"info": 0, "good": 1, "observe": 2, "care": 3}
 STATUS_LABELS = {
@@ -30,7 +31,10 @@ ACTION_LABELS = {
     "water": "물 줬어요",
     "light": "조명 조정했어요",
     "move": "위치 옮겼어요",
+    "prune": "잎 정리했어요",
+    "other": "조치했어요",
 }
+SPECIES_BY_LABEL = {"바질": "basil", "상추": "lettuce"}
 ENV_MAX_AGE_DAYS = 7  # 이보다 오래된 환경 기록은 판단에 쓰지 않습니다.
 
 
@@ -46,14 +50,14 @@ def _signed(value, digits=1):
     return ("+" if value > 0 else "") + _n(value, digits)
 
 
-def _rec(code, level, title, body, reasons=None, action=None):
+def _rec(code, level, title, body, reasons=None, action=None, action_label=None):
     return {
         "code": code,
         "level": level,
         "title": title,
         "body": body,
         "reasons": reasons or [],
-        "action": {"kind": action, "label": ACTION_LABELS[action]} if action else None,
+        "action": {"kind": action, "label": action_label or ACTION_LABELS[action]} if action else None,
     }
 
 
@@ -97,7 +101,12 @@ def evaluate(series, env_logs, care_logs, species, general, now, unit="px"):
         rec = _rec("baseline", "info", "기준 사진을 저장했어요",
                    "다음 촬영부터 이 사진과 비교해서 얼마나 자랐는지 알려드릴게요. "
                    "같은 위치·거리에서 찍으면 더 정확해요.")
-        return _result("pending", [rec], facts, summary)
+        # 사진이 한 장뿐이어도 특이 사항(병해충)은 바로 판단합니다.
+        env_state = _env_state(env_logs, care_logs, t, general, now)
+        note_recs, _ = _note_recs(series, care_logs, t, env_state, now, False, [])
+        recs = sorted(note_recs, key=lambda x: -LEVEL_RANK[x["level"]]) + [rec]
+        status = {3: "care", 2: "observe"}.get(max(LEVEL_RANK[x["level"]] for x in recs), "pending")
+        return _result(status, recs, facts, summary)
 
     # ------------------------------------------------------------------
     # 1) 생육 데이터 확인
@@ -147,28 +156,16 @@ def evaluate(series, env_logs, care_logs, species, general, now, unit="px"):
     # 2) 환경 데이터 확인 (최근 기록만 사용)
     # ------------------------------------------------------------------
     now = parse_time(now)
-    cutoff = now - timedelta(days=ENV_MAX_AGE_DAYS)
-    env = [e for e in env_logs if parse_time(e["at"]) >= cutoff]
-    last_water = next((c for c in reversed(care_logs) if c["kind"] == "water"), None)
+    env_state = _env_state(env_logs, care_logs, t, general, now)
+    env = env_state["env"]
+    last_water = env_state["last_water"]
     latest_m_at = series[-1]["taken_at"]
-
-    soil_entry = _latest(env, "soil")
-    soil = soil_entry["soil"] if soil_entry else None
-    watered_after_soil = bool(
-        soil_entry and last_water and parse_time(last_water["at"]) >= parse_time(soil_entry["at"])
-    )
-    soil_low = soil is not None and soil < t["soil_min"] and not watered_after_soil
-    soil_high = _persistent(_recent_values(env, "soil", lookback), lambda v: v > t["soil_max"], persist)
-
-    lux_vals = _recent_values(env, "lux", lookback)
-    light_low = _persistent(lux_vals, lambda v: v < t["lux_min"], persist)
-    temp_vals = _recent_values(env, "temp", lookback)
-    temp_high = _persistent(temp_vals, lambda v: v > t["temp_max"], persist)
-    temp_low = _persistent(temp_vals, lambda v: v < t["temp_min"], persist)
-    hum_vals = _recent_values(env, "humidity", lookback)
-    hum_high = _persistent(hum_vals, lambda v: v > t["humidity_max"], persist)
-    hum_low = _persistent(hum_vals, lambda v: v < t["humidity_min"], persist)
-    has_env = any(e.get(k) is not None for e in env for k in ("temp", "humidity", "soil", "lux"))
+    soil = env_state["soil"]
+    soil_low, soil_high = env_state["soil_low"], env_state["soil_high"]
+    lux_vals, light_low = env_state["lux_vals"], env_state["light_low"]
+    temp_vals, temp_high, temp_low = env_state["temp_vals"], env_state["temp_high"], env_state["temp_low"]
+    hum_vals, hum_high, hum_low = env_state["hum_vals"], env_state["humidity_high"], env_state["humidity_low"]
+    has_env = env_state["has_env"]
 
     facts.update({
         "soil": soil, "soil_low": soil_low, "soil_high": soil_high,
@@ -295,6 +292,11 @@ def evaluate(series, env_logs, care_logs, species, general, now, unit="px"):
                 action="water",
             ))
 
+    # 규칙 J. 특이 사항(병해충·생육 이상) 키워드 -> symptoms.py 사전과 대조
+    note_recs, note_explains = _note_recs(series, care_logs, t, env_state, now, growth_down, growth_reasons)
+    recs.extend(note_recs)
+    env_explained = env_explained or note_explains
+
     # 규칙 G. 생장 둔화의 원인을 환경 데이터로 설명할 수 없는 경우 -> 관찰
     if growth_down and not env_explained and not sudden_drop:
         body = "아직 원인이 명확하지 않아요. 다음 촬영까지 지켜볼게요."
@@ -336,6 +338,161 @@ def evaluate(series, env_logs, care_logs, species, general, now, unit="px"):
     top = max(LEVEL_RANK[x["level"]] for x in recs)
     status = {3: "care", 2: "observe", 1: "good"}.get(top, "pending")
     return _result(status, recs, facts, summary)
+
+
+def _josa(word):
+    """받침이 있으면 '이', 없으면 '가'를 붙입니다. (노균병이 / 응애가)"""
+    last = word[-1]
+    has_final = "가" <= last <= "힣" and (ord(last) - 0xAC00) % 28 != 0
+    return word + ("이" if has_final else "가")
+
+
+def _env_state(env_logs, care_logs, t, general, now):
+    """최근 환경 기록을 기준값과 비교한 결과."""
+    lookback = general.get("env_lookback", 3)
+    persist = general.get("persist_count", 2)
+    now = parse_time(now)
+    cutoff = now - timedelta(days=ENV_MAX_AGE_DAYS)
+    env = [e for e in env_logs if parse_time(e["at"]) >= cutoff]
+    last_water = next((c for c in reversed(care_logs) if c["kind"] == "water"), None)
+
+    soil_entry = _latest(env, "soil")
+    soil = soil_entry["soil"] if soil_entry else None
+    watered_after_soil = bool(
+        soil_entry and last_water and parse_time(last_water["at"]) >= parse_time(soil_entry["at"])
+    )
+    lux_vals = _recent_values(env, "lux", lookback)
+    temp_vals = _recent_values(env, "temp", lookback)
+    hum_vals = _recent_values(env, "humidity", lookback)
+    return {
+        "env": env,
+        "last_water": last_water,
+        "soil": soil,
+        "soil_low": soil is not None and soil < t["soil_min"] and not watered_after_soil,
+        "soil_high": _persistent(_recent_values(env, "soil", lookback), lambda v: v > t["soil_max"], persist),
+        "lux_vals": lux_vals,
+        "light_low": _persistent(lux_vals, lambda v: v < t["lux_min"], persist),
+        "temp_vals": temp_vals,
+        "temp_high": _persistent(temp_vals, lambda v: v > t["temp_max"], persist),
+        "temp_low": _persistent(temp_vals, lambda v: v < t["temp_min"], persist),
+        "hum_vals": hum_vals,
+        "humidity_high": _persistent(hum_vals, lambda v: v > t["humidity_max"], persist),
+        "humidity_low": _persistent(hum_vals, lambda v: v < t["humidity_min"], persist),
+        "has_env": any(e.get(k) is not None for e in env for k in ("temp", "humidity", "soil", "lux")),
+    }
+
+
+def _note_recs(series, care_logs, t, env_state, now, growth_down, growth_reasons):
+    """규칙 J. 특이 사항 규칙 (증상 → 병해충).
+
+    IF 특이 사항에서 증상(변색·반점·물러짐·구멍 …)을 찾았고
+       그 증상 조합이 어떤 병해충의 특징과 맞음
+       (+ 그 병해충이 잘 생기는 환경이 기록으로 확인되거나 생장이 느려짐)
+    THEN 가장 가능성 높은 병해충과 자료에 근거한 관리 방법을 추천하고,
+         후보가 여럿이면 구분하는 특징을 함께 안내
+
+    반환: (추천 목록, 생장 둔화를 설명했는지)
+    """
+    now = parse_time(now)
+    cutoff = now - timedelta(days=sx.NOTE_MAX_AGE_DAYS)
+    notes = [
+        {"at": m["taken_at"], "text": m["note"]}
+        for i, m in enumerate(series)
+        if (m.get("note") or "").strip() and (i == len(series) - 1 or parse_time(m["taken_at"]) >= cutoff)
+    ]
+    note = sx.pick_note(notes)
+    if note is None:
+        return [], False
+    species = SPECIES_BY_LABEL.get(t.get("label"), "other")
+    groups = sx.group(sx.rank(note, species, env_state))
+
+    quote = note["text"].strip()
+    if len(quote) > 40:
+        quote = quote[:40] + "…"
+    day = parse_time(note["at"])
+    note_reason = f"특이 사항 “{quote}” ({day.month}/{day.day} 기록)"
+
+    if not groups:
+        # 증상 하나만으로는 병해충을 정할 수 없을 때: 관련 병해충과 구분 방법을 안내 (관찰)
+        related = sx.rank(note, species, env_state, min_score=1)[:4]
+        if not related:
+            return [], False
+        labels = [sx.SYMPTOMS[c]["label"] for c in note["symptoms"]]
+        body = (f"'{', '.join(labels)}' 증상만으로는 원인을 정하기 어려워요. 관련 있는 병해충: "
+                + ", ".join(c["pest"]["name"] for c in related) + ". 구분하려면: "
+                + " / ".join(c["pest"]["check"] for c in related if c["pest"]["check"]) + ". "
+                "색, 위치(잎 앞면·뒷면, 밑동), 곰팡이·벌레·자국이 있는지 특이 사항에 더 적어 주면 더 정확하게 알려 드릴게요.")
+        return [_rec("note_symptom_watch", "observe", f"{', '.join(labels)} 증상이 있어요", body,
+                     [note_reason, "찾은 증상: " + ", ".join(labels),
+                      "관련 병해충: " + ", ".join(f"{c['pest']['name']}({c['total']}점)" for c in related)])], False
+
+    recs, explains = [], False
+    for cands in groups:
+        top = cands[0]
+        pest = top["pest"]
+        others = cands[1:3]
+        group_codes = set().union(*(c["matched"] for c in cands)) & set(note["symptoms"])
+        found_labels = [sx.SYMPTOMS[c]["label"] for c in note["symptoms"] if c in group_codes]
+        reasons = [note_reason]
+        if found_labels:
+            reasons.append("찾은 증상: " + ", ".join(found_labels))
+        for c in cands[:3]:
+            extra = []
+            if c["env_hits"]:
+                extra.append(f"환경 +{len(c['env_hits'])}")
+            if c["crop"]:
+                extra.append("작물 자료 +1")
+            reasons.append(f"{c['pest']['name']} {c['total']}점 ← " + ", ".join(c["hits"])
+                           + (f" ({', '.join(extra)})" if extra else ""))
+        reasons += [f"{sx.ENV_LABELS[e]} → {_josa(pest['name'])} 잘 생기는 환경이에요" for e in top["env_hits"]]
+        if growth_down:
+            reasons += growth_reasons
+            explains = True
+
+        supported = bool(top["env_hits"]) or growth_down
+        level = "care" if (top["score"] >= sx.CARE_SCORE
+                           or (top["score"] >= sx.SUPPORTED_SCORE and supported)) else "observe"
+
+        if pest["kind"] == "생육 이상":
+            title = "식물이 쓰러졌어요"
+            body = pest["body"]
+        else:
+            names = [pest["name"]] + [c["pest"]["name"] for c in others]
+            title = (f"{pest['name']} 의심" if not others
+                     else f"{pest['name']} 또는 {others[0]['pest']['name']} 의심")
+            lead = (f"기록한 증상({', '.join(found_labels)})으로 보면 " if found_labels else "")
+            if others:
+                body = (lead + f"{', '.join(names)} 가능성이 있어요. 가장 가능성이 높은 {pest['name']} 기준으로 안내할게요. "
+                        + pest["body"] + " 구분하려면: " + " / ".join(c["pest"]["check"] for c in cands[:3] if c["pest"]["check"]) + ".")
+            else:
+                body = lead + f"{pest['name']} 가능성이 있어요. " + pest["body"]
+
+        # 쓰러짐: 자료의 '혼동하기 쉬운 원인'을 증상·환경 데이터로 좁혀 봅니다.
+        if pest.get("causes"):
+            text = sx.normalize(note["text"])
+            likely = [c for c in pest["causes"]
+                      if any(env_state.get(f) for f in c["facts"])
+                      or any(code in note["symptoms"] for code in c["symptoms"])
+                      or any(sx.keyword_state(text, k)[0] == "pos" for k in c.get("keywords", []))]
+            if likely:
+                body += (" 기록을 보면 " + ", ".join(c["label"] for c in likely) + " 가능성이 있어요. "
+                         + " ".join(c["tip"] for c in likely))
+                reasons.append("가능한 원인: " + ", ".join(c["label"] for c in likely))
+
+        # 피드백: 특이 사항을 적은 뒤 이미 조치했으면 효과를 지켜봅니다.
+        acted = pest["action"] and any(
+            c["kind"] == pest["action"] and parse_time(c["at"]) >= day for c in care_logs)
+        if acted:
+            recs.append(_rec(f"note_{pest['code']}_done", "observe", f"{pest['name']} 조치 후 지켜보는 중이에요",
+                             "다음 촬영 때 특이 사항에 증상이 그대로인지 적어 주세요. "
+                             "좋아졌다면 '이상 없음'이나 '반점 없음'처럼 적으면 이 추천이 사라져요.",
+                             reasons))
+            continue
+        if level == "care" and pest["kind"] == "병해":
+            body += " " + sx.EXPERT_TIP
+        recs.append(_rec(f"note_{pest['code']}", level, title, body, reasons,
+                         action=pest["action"], action_label=pest.get("action_label")))
+    return recs, explains
 
 
 def _result(status, recs, facts, summary):

@@ -94,7 +94,8 @@ export async function resultView({ id }) {
       field('잎 수', numberInput({ name: 'leaf_count', unit: '장', value: m.leaf_count, step: 1 })),
       h('span')),
     h('div', { style: { height: '16px' } }),
-    field('메모', h('input', { class: 'input', name: 'note', value: m.note ?? '', maxlength: 300, placeholder: '예: 새 잎 2장 나옴' })),
+    field('특이 사항', h('input', { class: 'input', name: 'note', value: m.note ?? '', maxlength: 300, placeholder: '예: 잎에 갈색 반점, 밑동이 물러짐, 잎에 구멍' }),
+      '변색·반점·곰팡이·구멍 같은 증상을 적으면 미리 정해 둔 증상 키워드로 의심되는 병해충을 찾아 관리 추천에 반영해요.'),
     h('div', { style: { height: '16px' } }),
     field('촬영 시각', h('input', { class: 'input', type: 'datetime-local', name: 'taken_at', value: toLocalInput(m.taken_at) })));
 

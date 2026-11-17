@@ -100,7 +100,7 @@ export async function plantView({ id }) {
       r.action ? h('button', {
         class: 'btn btn-soft btn-md', style: { marginTop: '14px' },
         onclick: async () => { const u = await careSheet(p, { kind: r.action.kind, recCode: r.code }); if (u) rerender(u); },
-      }, h('span', { html: r.action.kind === 'water' ? icons.drop : icons.sun, style: { display: 'contents' } }), r.action.label) : null);
+      }, h('span', { html: icons[careIcon(r.action.kind)], style: { display: 'contents' } }), r.action.label) : null);
   }
 
   // ------------------------------------------------------------ 지표

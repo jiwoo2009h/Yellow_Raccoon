@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 
 from growth import summarize, with_units
 from recommend import evaluate
+from symptoms import find_symptoms
 from thresholds import GENERAL_DEFAULTS, SPECIES_DEFAULTS, merge_thresholds
 
 START = datetime(2026, 10, 1, 9, 0)
@@ -167,3 +168,101 @@ def test_photos_too_close_together_stay_pending():
     r = run(s)
     assert codes(r) == ["too_close"]
     assert r["status"] == "pending"
+
+
+# ---------------------------------------------------------------- 특이 사항 규칙 (증상 → 병해충)
+def with_notes(series, notes):
+    """notes: {측정 순번: 특이 사항 글}"""
+    for i, text in notes.items():
+        series[i]["note"] = text
+    return series
+
+
+def rec(result, code):
+    return next(r for r in result["recs"] if r["code"] == code)
+
+
+def note_codes(result):
+    return [c for c in codes(result) if c.startswith("note_")]
+
+
+def noted(text, species="lettuce", env=(), care=(), areas=GROWING):
+    return run(with_notes(series_from(areas), {len(areas) - 1: text}), env, care, species)
+
+
+def test_symptom_keywords_and_negation():
+    found, negated = find_symptoms("잎 뒷면에 하얀 곰팡이, 반점은 없음")
+    assert "underside_mold" in found and "white_mold" not in found  # 뒷면 곰팡이가 흰 곰팡이를 포함
+    assert "spot" not in found and "spot" in negated
+
+
+def test_symptom_combination_points_to_pest():
+    assert note_codes(noted("갈색 반점에 겹무늬가 있음"))[0] == "note_cercospora"
+    assert note_codes(noted("밑동이 물러지고 냄새가 남"))[0] == "note_soft_rot"
+    assert note_codes(noted("썩은 부분에 검은 알갱이"))[0] == "note_sclerotinia"
+    assert note_codes(noted("잎에 구불구불한 하얀 줄"))[0] == "note_leafminer"
+    assert note_codes(noted("잎에 반짝이는 점액 자국이 있고 구멍"))[0] == "note_slug"
+    assert note_codes(noted("잎에 흰 가루", "basil"))[0] == "note_powdery_mildew"
+
+
+def test_strong_combination_is_care_and_single_feature_is_observe():
+    assert rec(noted("밑동이 물러지고 냄새가 남"), "note_soft_rot")["level"] == "care"
+    assert rec(noted("잎 뒷면에 하얀 곰팡이"), "note_downy_mildew")["level"] == "observe"
+
+
+def test_env_support_raises_level_and_is_explained():
+    humid = [env_at(10, humidity=88), env_at(11, humidity=90)]
+    r = rec(noted("잎 뒷면에 하얀 곰팡이", env=humid), "note_downy_mildew")
+    assert r["level"] == "care"
+    assert any("노균병이 잘 생기는 환경" in x for x in r["reasons"])
+
+
+def test_similar_candidates_are_grouped_with_check_tips():
+    r = noted("잎에 갈색 반점이 생김")
+    assert len(note_codes(r)) == 1
+    body = r["recs"][0]["body"]
+    assert "구분하려면" in body and "겹무늬" in body
+
+
+def test_unrelated_problems_get_separate_recs():
+    assert set(note_codes(noted("진딧물 있고 잎에 구멍"))) == {"note_aphid", "note_caterpillar"}
+
+
+def test_single_symptom_gives_related_pests():
+    r = noted("잎에 변색이 생김")
+    assert note_codes(r) == ["note_symptom_watch"]
+    w = rec(r, "note_symptom_watch")
+    assert w["level"] == "observe" and "관련 있는 병해충" in w["body"]
+    assert noted("잎이 노랗게 변함")["status"] == "observe"
+
+
+def test_note_on_first_photo_counts():
+    r = run(with_notes(series_from([1000]), {0: "잎이 끈적하고 새순에 작은 벌레"}))
+    assert r["status"] == "care" and codes(r)[0] == "note_aphid" and "baseline" in codes(r)
+
+
+def test_note_cleared_by_newer_note():
+    s = with_notes(series_from(GROWING), {4: "갈색 반점에 겹무늬", 5: "이상 없음"})
+    assert note_codes(run(s)) == []
+    s = with_notes(series_from(GROWING), {4: "갈색 반점에 겹무늬", 5: "반점 없어짐"})
+    assert note_codes(run(s)) == []
+
+
+def test_collapse_uses_env_to_narrow_cause():
+    dark = [env_at(10, lux=1500), env_at(11, lux=1800)]
+    r = noted("모종이 쓰러짐", env=dark)
+    assert note_codes(r) == ["note_collapse"] and "빛 부족" in rec(r, "note_collapse")["body"]
+    assert note_codes(noted("밑동이 잘록하게 가늘어지고 쓰러짐"))[0] == "note_damping_off"
+
+
+def test_note_feedback_after_action():
+    care = [{"at": (START + timedelta(days=11)).isoformat(), "kind": "prune", "amount": None}]
+    assert "note_powdery_mildew_done" in codes(noted("흰 가루가 잎에 묻어 있음", care=care))
+
+
+def test_note_explains_slowdown_and_old_note_is_ignored():
+    r = noted("거미줄이 보임", "basil", areas=SLOWING)
+    assert "note_spider_mite" in codes(r) and "slowing" not in codes(r)
+    assert rec(r, "note_spider_mite")["level"] == "care"
+    old = run(with_notes(series_from(GROWING), {0: "갈색 반점에 겹무늬"}))  # 12일 전 기록, 최신 기록 아님
+    assert note_codes(old) == []

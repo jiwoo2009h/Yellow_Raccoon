@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 import cv2
 
 from seed_demo import draw_plant
+from thresholds import default_thresholds
 
 
 def photo(size, species="basil", seed=1):
@@ -91,17 +92,43 @@ def test_upload_rejects_non_image_and_empty_scene(client):
     assert empty.status_code == 422
 
 
-def test_settings_roundtrip_and_reanalyze(client):
+def test_rules_are_locked_but_hsv_is_editable(client):
     pid = make_plant(client)["id"]
     upload(client, pid, 0.4, "2026-10-01T09:00")
     s = client.get("/api/settings").get_json()["thresholds"]
-    s["species"]["basil"]["soil_min"] = 22
+    assert s == default_thresholds()
+
+    # 관리 추천 규칙(기준값)은 이용자가 바꿀 수 없어야 합니다.
+    rule = {**s, "species": {**s["species"], "basil": {**s["species"]["basil"], "soil_min": 22}}}
+    assert client.put("/api/settings", json={"thresholds": rule}).status_code == 403
+    general = {**s, "general": {**s["general"], "persist_count": 1}}
+    assert client.put("/api/settings", json={"thresholds": general}).status_code == 403
+    assert client.get("/api/settings").get_json()["thresholds"]["species"]["basil"]["soil_min"] == 30
+
+    # 식물 영역 색상(HSV) 범위는 원래처럼 바꿀 수 있어야 합니다.
+    s["species"]["basil"]["hsv_lower"] = [32, 40, 35]
     res = client.put("/api/settings", json={"thresholds": s})
-    assert res.get_json()["thresholds"]["species"]["basil"]["soil_min"] == 22
-    s["species"]["basil"]["temp_min"] = 40
+    assert res.status_code == 200
+    assert res.get_json()["thresholds"]["species"]["basil"]["hsv_lower"] == [32, 40, 35]
+    s["species"]["basil"]["hsv_lower"] = [95, 40, 35]
     assert client.put("/api/settings", json={"thresholds": s}).status_code == 400
     assert client.post(f"/api/plants/{pid}/reanalyze").get_json() == {"ok": 1, "failed": 0}
-    assert client.post("/api/settings/reset").get_json()["thresholds"]["species"]["basil"]["soil_min"] == 30
+    reset = client.post("/api/settings/reset").get_json()["thresholds"]["species"]["basil"]["hsv_lower"]
+    assert reset == default_thresholds()["species"]["basil"]["hsv_lower"]
+
+
+def test_stored_rule_values_are_ignored_but_hsv_kept(tmp_path):
+    import db
+    from app import create_app
+    create_app(tmp_path)
+    c = db.connect(str(tmp_path / "jaram.db"))
+    db.set_setting(c, "thresholds", {"species": {"basil": {"soil_min": 5, "hsv_lower": [31, 40, 35]}}})
+    c.commit()
+    c.close()
+    app = create_app(tmp_path)
+    got = app.test_client().get("/api/settings").get_json()["thresholds"]["species"]["basil"]
+    assert got["soil_min"] == 30
+    assert got["hsv_lower"] == [31, 40, 35]
 
 
 def test_report_and_csv(client):
@@ -121,3 +148,14 @@ def test_delete_measurement_removes_files(client, tmp_path):
     m = upload(client, pid, 0.3, "2026-10-01T09:00").get_json()["measurement"]
     assert client.delete(f"/api/measurements/{m['id']}").status_code == 200
     assert client.get(m["photo_url"]).status_code == 404
+
+
+def test_special_note_is_reflected_in_recommendation(client):
+    pid = make_plant(client)["id"]
+    mid = upload(client, pid, 0.3, "2026-10-01T09:00").get_json()["measurement"]["id"]
+    assert client.patch(f"/api/measurements/{mid}", json={"note": "새순에 작은 벌레가 모여 있고 잎이 끈적함"}).status_code == 200
+    plant = client.get(f"/api/plants/{pid}").get_json()
+    assert plant["status"] == "care"
+    assert any(r["code"] == "note_aphid" for r in plant["recs"])
+    rules = client.get("/api/settings").get_json()["symptoms"]
+    assert any(p["code"] == "aphid" for p in rules["pests"]) and any(x["code"] == "spot" for x in rules["symptoms"])

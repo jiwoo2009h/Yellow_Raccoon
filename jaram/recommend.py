@@ -10,6 +10,7 @@
   - 모든 추천에는 판단 근거(실제 수치)를 함께 붙여서 왜 그런 추천이 나왔는지 설명합니다.
 
 입력은 생장량(사진·3D) + 급수 기록(날짜·양·물 주기 전 흙 상태) + 식물 특이사항(시듦·웃자람 등) + 환경입니다.
+사진 기록의 특이 사항(글)에 적은 증상은 symptoms.py 사전으로 의심 병해충을 찾아 추천합니다 (_note_recs).
 토양 수분계·조도계 값은 선택이고, 누구나 할 수 있는 '흙 만져 보기(말랐음/촉촉함/젖어 있음)'로도 판단합니다.
 판단 근거는 농촌진흥청·농사로 재배 자료입니다 (ALGORITHM.md '참고 자료').
   - 물은 정해진 날짜가 아니라 흙 표면이 마른 것을 확인하고 주기, 받침 물 버리기, 날짜와 양 기록
@@ -27,6 +28,7 @@ import math
 from datetime import timedelta
 
 import rules as rules_mod
+import symptoms as sx
 from growth import days_between, parse_time, summarize
 
 # 식물 특이사항 (상태 기록에서 고르는 항목)
@@ -58,7 +60,10 @@ ACTION_LABELS = {
     "light": "조명 조정했어요",
     "move": "위치 옮겼어요",
     "fertilize": "비료 줬어요",
+    "prune": "잎 정리했어요",
+    "other": "조치했어요",
 }
+SPECIES_BY_LABEL = {"바질": "basil", "상추": "lettuce"}  # 특이 사항 규칙: 자료에서 확인된 작물 (symptoms.py crops)
 ENV_MAX_AGE_DAYS = 7  # 이보다 오래된 환경 기록은 판단에 쓰지 않습니다.
 PHOTO_MAX_AGE_DAYS = 7  # 마지막 사진이 이보다 오래되면 사진으로 본 잎 색·모양 변화로 판단하지 않습니다.
 BASE_WINDOW_DAYS = 10  # 잎 색·모양 비교 기준: 최근 사진 2장 전 이 기간 안의 가장 오래된 사진 3장
@@ -76,14 +81,14 @@ def _signed(value, digits=1):
     return ("+" if value > 0 else "") + _n(value, digits)
 
 
-def _rec(code, level, title, body, reasons=None, action=None):
+def _rec(code, level, title, body, reasons=None, action=None, action_label=None):
     return {
         "code": code,
         "level": level,
         "title": title,
         "body": body,
         "reasons": reasons or [],
-        "action": {"kind": action, "label": ACTION_LABELS[action]} if action else None,
+        "action": {"kind": action, "label": action_label or ACTION_LABELS[action]} if action else None,
     }
 
 
@@ -361,7 +366,12 @@ def evaluate(series, env_logs, care_logs, species, general, now, unit="px", scan
         rec = _rec("baseline", "info", "기준 사진을 저장했어요",
                    "다음 촬영부터 이 사진과 비교해서 얼마나 자랐는지 알려드릴게요. "
                    "같은 위치·거리에서 찍으면 더 정확해요.")
-        return _result("pending", [rec], facts, summary)
+        # 사진이 한 장뿐이어도 특이 사항(병해충)은 바로 판단합니다.
+        es = _env_state(env_logs, care_logs, observations, t, general, now)
+        note_recs, _ = _note_recs(series, care_logs, t, es, now, False, [])
+        recs = sorted(note_recs, key=lambda x: -LEVEL_RANK[x["level"]]) + [rec]
+        status = {3: "care", 2: "observe"}.get(max(LEVEL_RANK[x["level"]] for x in recs), "pending")
+        return _result(status, recs, facts, summary)
 
     # ------------------------------------------------------------------
     # 1) 생육 데이터 확인
@@ -438,30 +448,18 @@ def evaluate(series, env_logs, care_logs, species, general, now, unit="px", scan
     # 2) 환경 데이터 확인 (최근 기록만 사용)
     # ------------------------------------------------------------------
     now = parse_time(now)
-    cutoff = now - timedelta(days=ENV_MAX_AGE_DAYS)
-    env = [e for e in env_logs if parse_time(e["at"]) >= cutoff]
-    last_water = next((c for c in reversed(care_logs) if c["kind"] == "water" and parse_time(c["at"]) <= now), None)
+    es = _env_state(env_logs, care_logs, observations, t, general, now)
+    env, last_water, obs = es["env"], es["last_water"], es["obs"]
     latest_m_at = series[-1]["taken_at"]
-    obs = sorted((o for o in observations if parse_time(o["at"]) <= now), key=lambda o: parse_time(o["at"]))
 
     def watered_after(at):
         return bool(last_water and parse_time(last_water["at"]) >= parse_time(at))
 
-    # 흙 상태 1) 토양 수분계 (선택)
-    soil_entry = _latest(env, "soil")
-    soil = soil_entry["soil"] if soil_entry else None
-    soil_low_pct = soil is not None and soil < t["soil_min"] and not watered_after(soil_entry["at"])
-    soil_high_pct = _persistent(_recent_values(env, "soil", lookback), lambda v: v > t["soil_max"], persist)
-    # 흙 상태 2) 흙 만져 보기 (말랐음/촉촉함/젖어 있음) - 누구나 기록할 수 있는 값
-    soil_obs = [o for o in obs if o.get("soil_state") in SOIL_LABELS]
-    touch = soil_obs[-1] if soil_obs and days_between(soil_obs[-1]["at"], now) <= SOIL_STATE_MAX_AGE_DAYS else None
-    soil_dry_touch = bool(touch and touch["soil_state"] == "dry" and not watered_after(touch["at"]))
-    touch_states = [o["soil_state"] for o in soil_obs if parse_time(o["at"]) >= cutoff][-lookback:]
-    soil_wet_touch = _persistent(touch_states, lambda v: v == "wet", persist)
-    soil_low = soil_low_pct or soil_dry_touch
-    soil_high = soil_high_pct or soil_wet_touch
-    # 마지막 급수 뒤에 흙이 아직 촉촉하거나 젖어 있다고 기록했는지 (그러면 물 줄 때가 아님)
-    moist_after_water = bool(touch and touch["soil_state"] in ("moist", "wet") and not watered_after(touch["at"]))
+    soil_entry, soil, touch = es["soil_entry"], es["soil"], es["touch"]
+    soil_low_pct, soil_high_pct = es["soil_low_pct"], es["soil_high_pct"]
+    soil_dry_touch, soil_wet_touch = es["soil_dry_touch"], es["soil_wet_touch"]
+    soil_low, soil_high = es["soil_low"], es["soil_high"]
+    moist_after_water = es["moist_after_water"]
 
     # 급수 기록표 지표
     wf = water_facts(care_logs, obs, t, now)
@@ -482,15 +480,10 @@ def evaluate(series, env_logs, care_logs, species, general, now, unit="px", scan
     def sign_reason(code):
         return f"{_when(sign_at[code], now)} 기록한 특이사항: {SIGN_LABELS[code]}"
 
-    lux_vals = _recent_values(env, "lux", lookback)
-    light_low = _persistent(lux_vals, lambda v: v < t["lux_min"], persist)
-    temp_vals = _recent_values(env, "temp", lookback)
-    temp_high = _persistent(temp_vals, lambda v: v > t["temp_max"], persist)
-    temp_low = _persistent(temp_vals, lambda v: v < t["temp_min"], persist)
-    hum_vals = _recent_values(env, "humidity", lookback)
-    hum_high = _persistent(hum_vals, lambda v: v > t["humidity_max"], persist)
-    hum_low = _persistent(hum_vals, lambda v: v < t["humidity_min"], persist)
-    has_env = any(e.get(k) is not None for e in env for k in ("temp", "humidity", "soil", "lux"))
+    lux_vals, light_low = es["lux_vals"], es["light_low"]
+    temp_vals, temp_high, temp_low = es["temp_vals"], es["temp_high"], es["temp_low"]
+    hum_vals, hum_high, hum_low = es["hum_vals"], es["humidity_high"], es["humidity_low"]
+    has_env = es["has_env"]
 
     facts.update({
         "soil": soil, "soil_low": soil_low, "soil_high": soil_high,
@@ -601,6 +594,8 @@ def evaluate(series, env_logs, care_logs, species, general, now, unit="px", scan
         keep_reasons.append(f"최근 7일 물 {wf['count_7d']}회{amount}")
     keep_reasons += color_line
 
+    # 특이 사항(증상 → 병해충, symptoms.py): 코드가 추천을 만들고, 규칙 파일의 '코드 추천: 특이사항' 자리에 들어가요.
+    note_recs, note_explains = _note_recs(series, care_logs, t, es, now, growth_down, growth_reasons)
     rule_facts = {
         "생장감소": growth_down, "잘자람": growing_well, "급감": sudden_drop, "생장률없음": r is None,
         "판단엇갈림": mismatch, "3D판단": bool(vol), "3D부피증가": bool(vol and vol["growing"]),
@@ -630,6 +625,7 @@ def evaluate(series, env_logs, care_logs, species, general, now, unit="px", scan
         "기록14일이상": tracked_days >= 14, "빠진기록있음": bool(missing),
         "바질": t.get("label") == "바질", "상추": t.get("label") == "상추",
         "기타": t.get("label") not in ("바질", "상추"),
+        "특이사항증상": bool(note_recs), "특이사항설명": note_explains,
     }
     rule_values = {
         "물준지일": _n(wf["days_since"], 0) if wf["count"] else "",
@@ -680,9 +676,10 @@ def evaluate(series, env_logs, care_logs, species, general, now, unit="px", scan
     if rules is None:
         rules = rules_mod.load()
     recs = []
-    for rec in rules_mod.apply(rules, rule_facts, rule_values, rule_reasons):
+    for rec in rules_mod.apply(rules, rule_facts, rule_values, rule_reasons, generated={"특이사항": note_recs}):
         kind = rec["action"]
-        rec["action"] = {"kind": kind, "label": ACTION_LABELS[kind]} if kind else None
+        if isinstance(kind, str):  # 규칙 파일 추천은 행동 코드만, 코드 추천은 이미 {kind, label}
+            rec["action"] = {"kind": kind, "label": ACTION_LABELS[kind]}
         recs.append(rec)
     if not recs:  # 규칙을 모두 꺼도 화면이 비지 않게
         recs.append(_rec("no_rule", "info", "맞는 규칙이 없어요",
@@ -692,6 +689,177 @@ def evaluate(series, env_logs, care_logs, species, general, now, unit="px", scan
     top = max(LEVEL_RANK[x["level"]] for x in recs)
     status = {3: "care", 2: "observe", 1: "good"}.get(top, "pending")
     return _result(status, recs, facts, summary)
+
+
+def _env_state(env_logs, care_logs, observations, t, general, now):
+    """최근 환경 기록·흙 만져 보기 기록을 기준값과 비교한 결과.
+    관리 추천 규칙과 특이 사항(병해충) 규칙이 함께 써요. (사진이 한 장뿐일 때도 계산해요)"""
+    lookback = general.get("env_lookback", 3)
+    persist = general.get("persist_count", 2)
+    now = parse_time(now)
+    cutoff = now - timedelta(days=ENV_MAX_AGE_DAYS)
+    env = [e for e in env_logs if parse_time(e["at"]) >= cutoff]
+    last_water = next((c for c in reversed(care_logs) if c["kind"] == "water" and parse_time(c["at"]) <= now), None)
+    obs = sorted((o for o in observations if parse_time(o["at"]) <= now), key=lambda o: parse_time(o["at"]))
+
+    def watered_after(at):
+        return bool(last_water and parse_time(last_water["at"]) >= parse_time(at))
+
+    # 흙 상태 1) 토양 수분계 (선택)
+    soil_entry = _latest(env, "soil")
+    soil = soil_entry["soil"] if soil_entry else None
+    soil_low_pct = soil is not None and soil < t["soil_min"] and not watered_after(soil_entry["at"])
+    soil_high_pct = _persistent(_recent_values(env, "soil", lookback), lambda v: v > t["soil_max"], persist)
+    # 흙 상태 2) 흙 만져 보기 (말랐음/촉촉함/젖어 있음) - 누구나 기록할 수 있는 값
+    soil_obs = [o for o in obs if o.get("soil_state") in SOIL_LABELS]
+    touch = soil_obs[-1] if soil_obs and days_between(soil_obs[-1]["at"], now) <= SOIL_STATE_MAX_AGE_DAYS else None
+    soil_dry_touch = bool(touch and touch["soil_state"] == "dry" and not watered_after(touch["at"]))
+    touch_states = [o["soil_state"] for o in soil_obs if parse_time(o["at"]) >= cutoff][-lookback:]
+    soil_wet_touch = _persistent(touch_states, lambda v: v == "wet", persist)
+    lux_vals = _recent_values(env, "lux", lookback)
+    temp_vals = _recent_values(env, "temp", lookback)
+    hum_vals = _recent_values(env, "humidity", lookback)
+    return {
+        "env": env, "last_water": last_water, "obs": obs,
+        "soil_entry": soil_entry, "soil": soil, "touch": touch,
+        "soil_low_pct": soil_low_pct, "soil_high_pct": soil_high_pct,
+        "soil_dry_touch": soil_dry_touch, "soil_wet_touch": soil_wet_touch,
+        "soil_low": soil_low_pct or soil_dry_touch,
+        "soil_high": soil_high_pct or soil_wet_touch,
+        # 마지막 급수 뒤에 흙이 아직 촉촉하거나 젖어 있다고 기록했는지 (그러면 물 줄 때가 아님)
+        "moist_after_water": bool(touch and touch["soil_state"] in ("moist", "wet") and not watered_after(touch["at"])),
+        "lux_vals": lux_vals,
+        "light_low": _persistent(lux_vals, lambda v: v < t["lux_min"], persist),
+        "temp_vals": temp_vals,
+        "temp_high": _persistent(temp_vals, lambda v: v > t["temp_max"], persist),
+        "temp_low": _persistent(temp_vals, lambda v: v < t["temp_min"], persist),
+        "hum_vals": hum_vals,
+        "humidity_high": _persistent(hum_vals, lambda v: v > t["humidity_max"], persist),
+        "humidity_low": _persistent(hum_vals, lambda v: v < t["humidity_min"], persist),
+        "has_env": any(e.get(k) is not None for e in env for k in ("temp", "humidity", "soil", "lux")),
+    }
+
+
+def _josa(word):
+    """받침이 있으면 '이', 없으면 '가'를 붙입니다. (노균병이 / 응애가)"""
+    last = word[-1]
+    has_final = "가" <= last <= "힣" and (ord(last) - 0xAC00) % 28 != 0
+    return word + ("이" if has_final else "가")
+
+
+def _note_recs(series, care_logs, t, env_state, now, growth_down, growth_reasons):
+    """특이 사항 규칙 (증상 → 병해충). 규칙 파일(rules.md)의 '코드 추천: 특이사항' 자리에 들어가요.
+
+    IF 사진 기록의 특이 사항에서 증상(변색·반점·물러짐·구멍 …)을 찾았고
+       그 증상 조합이 어떤 병해충의 특징과 맞음
+       (넓은 증상 '변색' 보다 구체적인 '암갈색'·'겹무늬' 가 더 큰 점수 → symptoms.py 증상 범위)
+       (+ 그 병해충이 잘 생기는 환경이 기록으로 확인되거나 생장이 느려짐)
+    THEN 가장 가능성 높은 병해충과 자료에 근거한 관리 방법을 추천하고,
+         후보가 여럿이면 구분하는 특징을 함께 안내
+
+    반환: (추천 목록, 생장 둔화를 설명했는지)
+    """
+    now = parse_time(now)
+    cutoff = now - timedelta(days=sx.NOTE_MAX_AGE_DAYS)
+    notes = [
+        {"at": m["taken_at"], "text": m["note"]}
+        for i, m in enumerate(series)
+        if (m.get("note") or "").strip() and (i == len(series) - 1 or parse_time(m["taken_at"]) >= cutoff)
+    ]
+    note = sx.pick_note(notes)
+    if note is None:
+        return [], False
+    species = SPECIES_BY_LABEL.get(t.get("label"), "other")
+    groups = sx.group(sx.rank(note, species, env_state))
+
+    quote = note["text"].strip()
+    if len(quote) > 40:
+        quote = quote[:40] + "…"
+    day = parse_time(note["at"])
+    note_reason = f"특이 사항 “{quote}” ({day.month}/{day.day} 기록)"
+
+    if not groups:
+        # 증상 하나만으로는 병해충을 정할 수 없을 때: 관련 병해충과 구분 방법을 안내 (관찰)
+        related = sx.rank(note, species, env_state, min_score=1)[:4]
+        if not related:
+            return [], False
+        labels = [sx.SYMPTOMS[c]["label"] for c in note["symptoms"]]
+        body = (f"'{', '.join(labels)}' 증상만으로는 원인을 정하기 어려워요. 관련 있는 병해충: "
+                + ", ".join(c["pest"]["name"] for c in related) + ". 구분하려면: "
+                + " / ".join(c["pest"]["check"] for c in related if c["pest"]["check"]) + ". "
+                "색, 위치(잎 앞면·뒷면, 밑동), 곰팡이·벌레·자국이 있는지 특이 사항에 더 적어 주면 더 정확하게 알려 드릴게요.")
+        return [_rec("note_symptom_watch", "observe", f"{', '.join(labels)} 증상이 있어요", body,
+                     [note_reason, "찾은 증상: " + ", ".join(labels),
+                      "관련 병해충: " + ", ".join(f"{c['pest']['name']}({c['total']}점)" for c in related)])], False
+
+    recs, explains = [], False
+    for cands in groups:
+        top = cands[0]
+        pest = top["pest"]
+        others = sx.close_rivals(cands)  # 점수가 비슷한 다른 후보만 '또는 …' 으로 안내
+        group_codes = set().union(*(c["matched"] for c in cands)) & set(note["symptoms"])
+        found_labels = [sx.SYMPTOMS[c]["label"] for c in note["symptoms"] if c in group_codes]
+        reasons = [note_reason]
+        if found_labels:
+            reasons.append("찾은 증상: " + ", ".join(found_labels))
+        for c in cands[:3]:
+            extra = []
+            if c["env_hits"]:
+                extra.append(f"환경 +{len(c['env_hits'])}")
+            if c["crop"]:
+                extra.append("작물 자료 +1")
+            reasons.append(f"{c['pest']['name']} {c['total']}점 ← " + ", ".join(c["hits"])
+                           + (f" ({', '.join(extra)})" if extra else ""))
+        reasons += [f"{sx.ENV_LABELS[e]} → {_josa(pest['name'])} 잘 생기는 환경이에요" for e in top["env_hits"]]
+        if growth_down:
+            reasons += growth_reasons
+            explains = True
+
+        supported = bool(top["env_hits"]) or growth_down
+        level = "care" if (top["score"] >= sx.CARE_SCORE
+                           or (top["score"] >= sx.SUPPORTED_SCORE and supported)) else "observe"
+
+        if pest["kind"] == "생육 이상":
+            title = "식물이 쓰러졌어요"
+            body = pest["body"]
+        else:
+            names = [pest["name"]] + [c["pest"]["name"] for c in others]
+            title = (f"{pest['name']} 의심" if not others
+                     else f"{pest['name']} 또는 {others[0]['pest']['name']} 의심")
+            lead = (f"기록한 증상({', '.join(found_labels)})으로 보면 " if found_labels else "")
+            if others:
+                body = (lead + f"{', '.join(names)} 가능성이 있어요. 가장 가능성이 높은 {pest['name']} 기준으로 안내할게요. "
+                        + pest["body"] + " 구분하려면: "
+                        + " / ".join(c["pest"]["check"] for c in [top, *others] if c["pest"]["check"]) + ".")
+            else:
+                body = lead + f"{pest['name']} 가능성이 있어요. " + pest["body"]
+
+        # 쓰러짐: 자료의 '혼동하기 쉬운 원인'을 증상·환경 데이터로 좁혀 봅니다.
+        if pest.get("causes"):
+            text = sx.normalize(note["text"])
+            likely = [c for c in pest["causes"]
+                      if any(env_state.get(f) for f in c["facts"])
+                      or any(code in note["symptoms"] for code in c["symptoms"])
+                      or any(sx.keyword_state(text, k)[0] == "pos" for k in c.get("keywords", []))]
+            if likely:
+                body += (" 기록을 보면 " + ", ".join(c["label"] for c in likely) + " 가능성이 있어요. "
+                         + " ".join(c["tip"] for c in likely))
+                reasons.append("가능한 원인: " + ", ".join(c["label"] for c in likely))
+
+        # 피드백: 특이 사항을 적은 뒤 이미 조치했으면 효과를 지켜봅니다.
+        acted = pest["action"] and any(
+            c["kind"] == pest["action"] and parse_time(c["at"]) >= day for c in care_logs)
+        if acted:
+            recs.append(_rec(f"note_{pest['code']}_done", "observe", f"{pest['name']} 조치 후 지켜보는 중이에요",
+                             "다음 촬영 때 특이 사항에 증상이 그대로인지 적어 주세요. "
+                             "좋아졌다면 '이상 없음'이나 '반점 없음'처럼 적으면 이 추천이 사라져요.",
+                             reasons))
+            continue
+        if level == "care" and pest["kind"] == "병해":
+            body += " " + sx.EXPERT_TIP
+        recs.append(_rec(f"note_{pest['code']}", level, title, body, reasons,
+                         action=pest["action"], action_label=pest.get("action_label")))
+    return recs, explains
 
 
 def _result(status, recs, facts, summary):

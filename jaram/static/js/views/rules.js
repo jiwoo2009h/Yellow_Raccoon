@@ -1,8 +1,8 @@
-// 행동 추천 규칙을 글로 고치기 (규칙 파일 rules.md 와 같은 형식)
-// 고친 규칙은 내 계정에만 저장되고, 저장하면 내 식물의 추천에 바로 반영돼요.
+// 행동 추천 규칙 보기·시험 (규칙 파일 rules.md 와 같은 형식)
+// 관리 추천 규칙은 개발자만 rules.md 에서 바꿔요. 여기서는 읽고, 고친 글을 검사·미리 보기·파일로 받기만 해요.
 
 import { api } from '../api.js';
-import { h, icons, topbar, toast, confirmSheet, statusBadge, skeleton, friendlyError, withBusy, chips, goBack } from '../ui.js';
+import { h, icons, topbar, toast, confirmSheet, statusBadge, skeleton, withBusy, chips, goBack } from '../ui.js';
 
 const LEVEL = { care: '관리', observe: '관찰', good: '정상', info: '참고' };
 
@@ -11,8 +11,8 @@ export async function rulesView() {
   screen.append(topbar({ title: '' }), skeleton(120, 8), skeleton(420));
   const [data, plantRes] = await Promise.all([api.rules(), api.plants()]);
   const plants = plantRes.plants || [];
-  let current = data;
-  let saved = data.text;
+  const current = data;
+  const saved = data.text;
   let previewId = plants.length ? plants[0].id : null;
 
   const isDirty = () => editor.value !== saved;
@@ -26,20 +26,14 @@ export async function rulesView() {
   const stateBox = h('div');
   function renderState() {
     const dirty = isDirty();
-    const parts = [];
-    if (current.error) {
-      parts.push(h('div', { class: 'notice warn', style: { marginTop: '4px' } },
-        h('span', { html: icons.warn, style: { display: 'contents' } }),
-        h('span', { class: 'grow' }, h('b', null, '저장한 규칙을 읽지 못해서 지금은 기본 규칙으로 판단하고 있어요. '), current.error)));
-    }
-    parts.push(h('div', { class: `notice${current.custom ? ' accent' : ''}`, style: { marginTop: '4px' } },
-      h('span', { html: current.custom ? icons.check : icons.info, style: { display: 'contents' } }),
+    stateBox.replaceChildren(h('div', { class: 'notice', style: { marginTop: '4px' } },
+      h('span', { html: icons.info, style: { display: 'contents' } }),
       h('span', { class: 'grow' },
-        current.custom ? h('b', null, '내가 고친 규칙을 쓰고 있어요. ') : h('b', null, '기본 규칙(rules.md)을 쓰고 있어요. '),
-        `규칙 ${current.check?.count ?? 0}개`,
-        dirty ? ' · 저장하지 않은 수정이 있어요' : '')));
-    stateBox.replaceChildren(...parts);
-    saveBtn.disabled = !dirty;
+        h('b', null, '관리 추천 규칙은 개발자가 규칙 파일(rules.md)에서 정해요. '),
+        `모든 계정이 같은 규칙 ${current.check?.count ?? 0}개를 써요. `,
+        dirty
+          ? '고친 글은 저장되지 않아요. 검사·미리 보기로 시험해 보고, 바꾸면 좋겠다면 "파일로 받기"로 받아 개발자에게 전해 주세요.'
+          : '아래 글을 고쳐 검사·미리 보기로 시험해 볼 수 있지만 저장되지는 않아요.')));
   }
 
   // ------------------------------------------------------------ 검사 결과
@@ -103,7 +97,7 @@ export async function rulesView() {
       editor.value = await f.text();
       renderState();
       showCheck(await api.checkRules(editor.value));
-      toast(`${f.name}을(를) 불러왔어요. 확인한 뒤 저장해 주세요`);
+      toast(`${f.name}을(를) 불러왔어요. 미리 보기로 시험해 보세요`);
     },
   });
   const downloadBtn = h('button', {
@@ -120,43 +114,10 @@ export async function rulesView() {
   const uploadBtn = h('button', { class: 'btn btn-secondary btn-md', type: 'button', onclick: () => fileInput.click() },
     h('span', { html: icons.note, style: { display: 'contents' } }), '파일 불러오기');
 
-  const saveBtn = h('button', {
-    class: 'btn btn-primary', type: 'button',
-    onclick: async () => {
-      await withBusy(saveBtn, async () => {
-      try {
-        current = await api.saveRules(editor.value);
-        saved = editor.value;
-        showCheck(current.check);
-        renderState();
-        toast('규칙을 저장했어요. 내 식물의 추천에 바로 반영돼요');
-      } catch (err) {
-        if (err.data?.errors) showCheck({ ok: false, errors: err.data.errors });
-        toast(friendlyError(err), { error: true });
-      }
-      }, { quiet: true });
-      renderState(); // withBusy 가 버튼을 다시 켜므로, 저장한 뒤 '바뀐 것 없음'이면 다시 꺼요
-    },
-  }, '저장하기');
-  const resetBtn = h('button', {
-    class: 'btn btn-secondary', type: 'button', style: { flex: '0 0 38%' },
-    onclick: async () => {
-      const ok = await confirmSheet({
-        title: '기본 규칙으로 되돌릴까요?',
-        desc: '내가 고친 규칙을 지우고 rules.md 의 기본 규칙을 써요. 필요하면 먼저 "파일로 받기"로 저장해 두세요.',
-        ok: '되돌리기', danger: true,
-      });
-      if (!ok) return;
-      await withBusy(resetBtn, async () => {
-        current = await api.resetRules();
-        editor.value = current.text;
-        saved = current.text;
-        showCheck(current.check);
-        toast('기본 규칙으로 되돌렸어요');
-      });
-      renderState();
-    },
-  }, '기본값으로');
+  const restoreBtn = h('button', {
+    class: 'btn btn-secondary btn-md', type: 'button',
+    onclick: () => { editor.value = saved; renderState(); showCheck(current.check); previewBox.replaceChildren(); },
+  }, h('span', { html: icons.refresh, style: { display: 'contents' } }), '원래 규칙으로');
 
   // ------------------------------------------------------------ 미리 보기
   const previewBox = h('div', { class: 'rules-preview', 'aria-live': 'polite' });
@@ -170,13 +131,13 @@ export async function rulesView() {
         throw err;
       }
     }),
-  }, h('span', { html: icons.eye, style: { display: 'contents' } }), '고친 규칙으로 미리 보기');
+  }, h('span', { html: icons.eye, style: { display: 'contents' } }), '이 글로 미리 보기');
 
   function renderPreview(res) {
     const plant = plants.find((p) => p.id === previewId);
     previewBox.replaceChildren(
       h('div', { class: 'status-head', style: { marginTop: '16px' } }, statusBadge(res.status, res.status_label),
-        h('span', { class: 'caption' }, `${plant?.name || ''} · 저장 전 미리 보기`)),
+        h('span', { class: 'caption' }, `${plant?.name || ''} · ${isDirty() ? '고친 글로 미리 보기' : '지금 규칙으로 미리 보기'}`)),
       ...res.recs.map((r) => h('div', { class: 'rec' },
         h('h3', { class: 'rec-title' }, statusBadge(r.level === 'info' ? 'info' : r.level, LEVEL[r.level] || r.level), r.title),
         h('p', { class: 'status-body' }, r.body),
@@ -205,23 +166,23 @@ export async function rulesView() {
     topbar({
       title: '',
       onBack: async () => {
-        if (isDirty() && !(await confirmSheet({ title: '저장하지 않고 나갈까요?', desc: '고친 내용이 사라져요.', ok: '나가기', danger: true }))) return;
+        if (isDirty() && !(await confirmSheet({ title: '고친 글을 두고 나갈까요?', desc: '고친 글은 저장되지 않아요. 필요하면 먼저 "파일로 받기"로 받아 두세요.', ok: '나가기', danger: true }))) return;
         goBack('#/settings');
       },
     }),
     h('div', { class: 'page-head', style: { paddingTop: '8px' } }, h('div', null,
       h('h1', { class: 'large-title' }, '추천 규칙'),
-      h('p', { class: 'subtitle' }, '조건·단계·문구를 글로 고치면 행동 추천이 바뀌어요. 내 계정에만 적용돼요.'))),
+      h('p', { class: 'subtitle' }, '어떤 조건에서 어떤 행동 추천이 나오는지 글로 읽고, 고친 글을 내 식물로 시험해 볼 수 있어요.'))),
     stateBox,
     h('section', { class: 'card', style: { marginTop: '12px' } },
       h('h2', { class: 'card-title' }, '규칙 글'),
       h('p', { class: 'card-sub', style: { marginBottom: '14px' } },
         '"## 이름 (코드)" 하나가 규칙 하나예요. 맨 위의 "읽는 법"을 먼저 읽어 보세요. 아래 이름 목록을 누르면 커서 위치에 넣어 줘요.'),
       editor,
-      h('div', { class: 'btn-row rules-tools' }, checkBtn, downloadBtn, uploadBtn),
+      h('div', { class: 'btn-row rules-tools' }, checkBtn, downloadBtn, uploadBtn, restoreBtn),
       fileInput,
       checkBox),
-    h('h2', { class: 'section-title' }, '미리 보기', h('small', null, '저장 전에 내 식물로 확인')),
+    h('h2', { class: 'section-title' }, '미리 보기', h('small', null, '이 글로 내 식물을 판단해 보기')),
     h('section', { class: 'card' },
       plants.length
         ? [chips(plants.map((p) => [p.id, p.name]), previewId, (v) => { previewId = v; previewBox.replaceChildren(); }, 'chips in-card wrap'),
@@ -234,10 +195,10 @@ export async function rulesView() {
       refGroup('특별한 이름 (조건에 써요)', ref.dynamic.filter((d) => !d.name.includes('코드'))),
       refGroup('값 (제목·내용에 써요)', ref.values, (x) => `{${x}}`),
       refGroup('근거 묶음 (근거에 써요)', ref.reasons),
+      ref.generated?.length ? refGroup('코드 추천 (코드 추천에 써요)', ref.generated) : null,
       h('p', { class: 'caption', style: { margin: '14px 0 0' } },
         `단계: ${ref.levels.join(' · ')}  /  행동: ${ref.actions.join(' · ')}  /  조건 잇기: 그리고 · 또는 · 아님 · ( )`,
-        h('br'), '이미 나온 추천 확인: 추천:코드  ·  관리추천:코드 (예: 추천:water_needed,water_done)')),
-    h('div', { class: 'cta' }, h('div', { class: 'btn-row' }, resetBtn, saveBtn)));
+        h('br'), '이미 나온 추천 확인: 추천:코드  ·  관리추천:코드 (예: 추천:water_needed,water_done)')));
   renderState();
   showCheck(data.check);
   return { cleanup: () => {} };

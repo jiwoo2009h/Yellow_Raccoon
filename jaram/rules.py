@@ -14,6 +14,7 @@
     - 행동: 물주기                      ← 물주기 / 조명 조정 / 위치 옮기기 / 비료 (선택)
     - 생장 감소 설명: 예                ← 이 추천이 나오면 '생장 감소의 원인을 찾았다'로 봐요 (선택)
     - 근거 더하기: light_low, stretching (관리)  ← 새 추천 대신 이미 나온 추천에 근거만 더해요 (선택)
+    - 코드 추천: 특이사항               ← 코드가 만든 추천(예: 특이 사항 증상 → 병해충)을 이 자리에 넣어요 (선택)
     - 사용: 아니오                      ← 규칙 끄기 (선택)
 
 조건: 사실 이름을 '그리고 / 또는 / 아님 / ( )'로 묶어요.
@@ -84,6 +85,8 @@ FACTS = {
     "잎끝마름": "최근 특이사항: 잎 끝이 마름",
     "병해충": "최근 특이사항: 벌레·곰팡이·반점",
     "빽빽함": "최근 특이사항: 잎이 빽빽하게 겹침",
+    "특이사항증상": "사진 기록의 특이 사항(글)에서 증상·병해충 이름을 찾아 병해충 추천을 만들었음 (최근 7일, symptoms.py 사전)",
+    "특이사항설명": "특이 사항으로 찾은 병해충이 생장 감소를 설명함 (생장이 느려졌고 병해충 추천이 나옴)",
     # 환경
     "조도낮음": "조도가 기준보다 낮은 기록이 이어짐",
     "조도기록있음": "최근 조도 기록이 있음",
@@ -123,6 +126,10 @@ VALUES = {
     "환경팁": "고온·저온·습도 문제에 맞는 관리 팁 문장들",
     "빠진기록": "빠진 기록 목록 (예: 물 준 날짜와 양, 흙 상태)",
     "식물종류": "바질 / 상추 / 기타",
+}
+GENERATED = {
+    "특이사항": "특이 사항(글)에 적은 증상을 증상 키워드 사전(symptoms.py)과 대조해 만든 병해충 추천. "
+               "단계·제목·내용·근거는 코드가 정해요 (여러 개일 수 있어요)",
 }
 REASONS = {
     "생장근거": "최근 생장률(면적·높이 또는 3D 부피), 둔화·정체 정도",
@@ -179,6 +186,7 @@ class Rule:
     explains: object = None
     merge_into: list = field(default_factory=list)
     merge_level: str = None
+    generated: str = None
     enabled: bool = True
 
 
@@ -337,7 +345,7 @@ _ITEM = re.compile(r"^\s*-\s*([^:：]+?)\s*[:：]\s*(.*)$")
 KEYS = {
     "묶음": "group", "조건": "cond", "단계": "level", "제목": "title", "내용": "body", "근거": "reasons",
     "행동": "action", "생장 감소 설명": "explains", "원인 설명": "explains", "근거 더하기": "merge",
-    "사용": "enabled",
+    "코드 추천": "generated", "사용": "enabled",
 }
 
 
@@ -384,8 +392,8 @@ def parse_rules(text):
             return
         rule, fields = cur
         try:
-            # 근거 더하기 규칙은 새 추천을 만들지 않으니 단계·제목·내용이 없어도 돼요
-            needs = ("조건",) if "근거 더하기" in fields else ("조건", "단계", "제목", "내용")
+            # 근거 더하기·코드 추천 규칙은 글을 직접 만들지 않으니 단계·제목·내용이 없어도 돼요
+            needs = ("조건",) if ("근거 더하기" in fields or "코드 추천" in fields) else ("조건", "단계", "제목", "내용")
             for need in needs:
                 if need not in fields:
                     raise ValueError(f"'{need}' 이 없어요")
@@ -472,6 +480,10 @@ def _apply_field(rule, key, value):
         rule.merge_into = [c.strip() for c in value.split(",") if c.strip()]
         if not rule.merge_into:
             raise ValueError("근거를 더할 추천 코드를 적어 주세요")
+    elif key == "generated":
+        if value not in GENERATED:
+            raise ValueError(f"모르는 코드 추천 '{value}'{_suggest(value, GENERATED)} (쓸 수 있는 것: {', '.join(GENERATED)})")
+        rule.generated = value
     elif key == "enabled":
         if value not in YES and value not in NO:
             raise ValueError("'예' 또는 '아니오'로 적어 주세요")
@@ -505,11 +517,13 @@ def check(text):
 
 
 # ---------------------------------------------------------------- 적용
-def apply(rules, facts, values, reasons):
+def apply(rules, facts, values, reasons, generated=None):
     """규칙을 위에서부터 차례로 적용해 추천 목록을 만들어요.
 
     facts: {사실 이름: bool}, values: {값 이름: 글}, reasons: {근거 이름: [문장]}
+    generated: {코드 추천 이름: [추천]} ('코드 추천' 규칙이 이 자리에 그대로 넣어요)
     """
+    generated = generated or {}
     state = {"facts": facts, "values": values, "recs": [], "explained": False}
     fired = set()
     for rule in rules:
@@ -521,7 +535,16 @@ def apply(rules, facts, values, reasons):
         for cond, name in rule.reasons:
             if cond is None or _eval(cond, state):
                 lines.extend(x for x in reasons.get(name, []) if x not in lines)
-        if rule.merge_into:
+        if rule.generated:
+            made = generated.get(rule.generated) or []
+            if not made:
+                continue
+            for rec in made:
+                rec = {**rec, "reasons": list(rec.get("reasons") or [])}
+                rec["reasons"].extend(x for x in lines if x not in rec["reasons"])
+                rec.setdefault("rule", rule.name)
+                state["recs"].append(rec)
+        elif rule.merge_into:
             target = next((r for r in state["recs"] if r["code"] in rule.merge_into
                            and (rule.merge_level is None or r["level"] == rule.merge_level)), None)
             if target is None:
@@ -551,6 +574,7 @@ def reference():
         "facts": [{"name": k, "desc": v} for k, v in FACTS.items()],
         "dynamic": [{"name": k, "desc": v} for k, v in DYNAMIC.items()],
         "values": [{"name": k, "desc": v} for k, v in VALUES.items()],
+        "generated": [{"name": k, "desc": v} for k, v in GENERATED.items()],
         "reasons": [{"name": k, "desc": v} for k, v in REASONS.items()],
         "levels": ["관리", "관찰", "정상", "참고"],
         "actions": ["물주기", "조명 조정", "위치 옮기기", "비료", "없음"],

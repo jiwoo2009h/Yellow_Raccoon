@@ -131,13 +131,15 @@ def test_recent_scans_drive_recommendation(client):
     assert any("3D 부피 생장률" in reason for rec in plant["recs"] for reason in rec["reasons"])
 
 
-def test_volume_threshold_validation(client):
+def test_volume_thresholds_are_locked(client):
     th = client.get("/api/settings").get_json()["thresholds"]
-    th["species"]["basil"]["volume_slowdown_ratio"] = 120
+    base = th["species"]["basil"]["volume_slowdown_ratio"]
+    th["species"]["basil"]["volume_slowdown_ratio"] = 40 if base != 40 else 45
     r = client.put("/api/settings", json={"thresholds": th}, headers={"X-Requested-With": "jaram"})
-    assert r.status_code == 400
-    th["species"]["basil"]["volume_slowdown_ratio"] = 40
-    th["general"]["scan_max_age_days"] = 500
-    saved = client.put("/api/settings", json={"thresholds": th}, headers={"X-Requested-With": "jaram"}).get_json()
-    assert saved["thresholds"]["species"]["basil"]["volume_slowdown_ratio"] == 40
-    assert saved["thresholds"]["general"]["scan_max_age_days"] == 60
+    assert r.status_code == 403  # 3D 생장 판단 기준은 개발자만 바꿔요 (thresholds.py)
+    th["species"]["basil"]["volume_slowdown_ratio"] = base
+    th["general"]["scan_max_age_days"] = 30
+    r = client.put("/api/settings", json={"thresholds": th}, headers={"X-Requested-With": "jaram"})
+    assert r.status_code == 403
+    saved = client.get("/api/settings").get_json()["thresholds"]
+    assert saved["species"]["basil"]["volume_slowdown_ratio"] == base

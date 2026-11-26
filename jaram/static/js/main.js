@@ -15,7 +15,7 @@ import { scanView } from './views/scan.js';
 import { scanResultView } from './views/scanResult.js';
 import { reportView } from './views/report.js';
 import { validationView } from './views/validation.js';
-import { settingsView, speciesSettingsView, generalSettingsView, algorithmView } from './views/settings.js';
+import { settingsView, speciesSettingsView, generalSettingsView, symptomSettingsView, algorithmView } from './views/settings.js';
 import { rulesView } from './views/rules.js';
 
 const routes = [
@@ -25,6 +25,7 @@ const routes = [
   ['/settings', settingsView, 'settings'],
   ['/settings/species/:key', speciesSettingsView],
   ['/settings/general', generalSettingsView],
+  ['/settings/symptoms', symptomSettingsView],
   ['/settings/algorithm', algorithmView],
   ['/settings/rules', rulesView],
   ['/plant/new', plantFormView],

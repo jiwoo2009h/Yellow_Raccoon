@@ -42,9 +42,10 @@ import rules as rules_mod
 import scans_api
 import suggest as suggest_mod
 import validation as validation_mod
+from symptoms import public_rules
 from growth import parse_time, scan_series, with_units
 from recommend import SIGN_LABELS, SOIL_LABELS, evaluate
-from thresholds import SPECIES_KEYS, default_thresholds, merge_thresholds
+from thresholds import SPECIES_KEYS, apply_user_settings, default_thresholds, locked_changes
 from vision import PlantAnalyzer, PlantNotFoundError, encode_jpeg, encode_png, load_image
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -419,11 +420,12 @@ def create_app(data_dir=None, password=None):
         return f"thresholds:{u['id']}" if u else "thresholds"
 
     def thresholds():
-        """추천 기준. 계정 모드에서는 사람마다 따로 저장하고, 없으면 계정 도입 전 공통 기준 → 기본값."""
+        """추천 기준. 관리 추천 규칙의 기준값은 thresholds.py(개발자)에서만 정하고,
+        이용자 설정은 사진 분석용 색상(HSV) 범위만 반영해요. 계정 모드에서는 색상 범위를 사람마다 따로 저장해요."""
         stored = db.get_setting(conn(), thresholds_key())
         if stored is None and thresholds_key() != "thresholds":
             stored = db.get_setting(conn(), "thresholds")
-        return merge_thresholds(stored)
+        return apply_user_settings(stored)
 
     def my_plants(extra="", params=()):
         """지금 사용자가 볼 수 있는 식물 (계정 모드면 자기 식물만)"""
@@ -478,20 +480,10 @@ def create_app(data_dir=None, password=None):
         u = current_user()
         return f"rules:{u['id']}" if u else "rules"
 
-    def rules_text():
-        """내가 고친 추천 규칙 글. 고친 적이 없으면 None (기본 규칙 파일 rules.md 를 써요)."""
-        stored = db.get_setting(conn(), rules_key())
-        return stored if isinstance(stored, str) and stored.strip() else None
-
     def active_rules():
-        """(규칙 목록, 정보). 저장된 규칙을 읽을 수 없으면 기본 규칙으로 판단하고 그 사실을 알려 줘요."""
-        text = rules_text()
-        if text is None:
-            return rules_mod.load(), {"custom": False, "error": None}
-        try:
-            return rules_mod.load(text), {"custom": True, "error": None}
-        except rules_mod.RuleError as exc:
-            return rules_mod.load(), {"custom": True, "error": str(exc)}
+        """(규칙 목록, 정보). 관리 추천 규칙은 개발자가 정하는 규칙 파일(rules.md)만 써요.
+        예전에 계정별로 저장한 규칙이 남아 있어도 판단에는 쓰지 않아요."""
+        return rules_mod.load(), {"custom": False, "error": None}
 
     def bundle(plant, th=None, rules=None):
         """식물 하나의 기록 + 생장 계산 + 추천 결과를 한 번에 만듭니다."""
@@ -838,7 +830,7 @@ def create_app(data_dir=None, password=None):
             v = num(body["leaf_count"], 0, 999, "잎 수")
             fields["leaf_count"] = int(v) if v is not None else None
         if "note" in body:
-            fields["note"] = text(body["note"], 300, "메모")
+            fields["note"] = text(body["note"], 300, "특이 사항")
         if fields:
             sets = ", ".join(f"{k} = ?" for k in fields)
             conn().execute(f"UPDATE measurements SET {sets} WHERE id = ?", (*fields.values(), mid))
@@ -1006,10 +998,8 @@ def create_app(data_dir=None, password=None):
 
     # ---------------- 행동 추천 규칙 (글로 고치기) ----------------
     def rules_payload():
-        text = rules_text()
-        shown = text if text is not None else rules_mod.default_text()
-        _, info = active_rules()
-        return {"text": shown, "custom": text is not None, "error": info["error"],
+        shown = rules_mod.default_text()
+        return {"text": shown, "custom": False, "error": None, "locked": True,
                 "check": rules_mod.check(shown), "reference": rules_mod.reference()}
 
     def posted_rules_text():
@@ -1034,13 +1024,8 @@ def create_app(data_dir=None, password=None):
 
     @app.put("/api/rules")
     def put_rules():
-        text = posted_rules_text()
-        res = rules_mod.check(text)
-        if not res["ok"]:
-            raise ApiError("규칙에 고칠 곳이 있어서 저장하지 않았어요.", errors=res["errors"])
-        db.set_setting(conn(), rules_key(), text)
-        conn().commit()
-        return jsonify(rules_payload())
+        # 관리 추천 규칙은 개발자만 rules.md 에서 바꿔요. 앱에서는 확인·검사·미리 보기만 할 수 있어요.
+        raise ApiError("관리 추천 규칙은 앱에서 바꿀 수 없어요. 고친 규칙 파일을 개발자에게 전해 rules.md 에 반영해 주세요.", 403)
 
     @app.post("/api/rules/reset")
     def reset_rules():
@@ -1066,37 +1051,29 @@ def create_app(data_dir=None, password=None):
                        true_facts=result["facts"].get("rule_facts", []))
 
     # ---------------- 설정(추천 기준) ----------------
+    # 관리 행동 추천 규칙(기준값·특이 사항 키워드·규칙 파일)은 개발자만 thresholds.py / symptoms.py / rules.md 에서 바꿔요.
+    # 이용자는 사진 분석용 식물 영역 색상(HSV) 범위만 바꿀 수 있어요.
     @app.get("/api/settings")
     def get_settings():
-        return jsonify(thresholds=thresholds(), defaults=default_thresholds())
+        return jsonify(thresholds=thresholds(), defaults=default_thresholds(), symptoms=public_rules(), locked=True)
 
     @app.put("/api/settings")
     def put_settings():
         body = request.get_json(silent=True) or {}
-        merged = merge_thresholds(body.get("thresholds"))
-        for key, cfg in merged["species"].items():
+        requested = body.get("thresholds")
+        if locked_changes(requested):
+            raise ApiError("관리 추천 규칙은 바꿀 수 없어요. 색상(HSV) 범위만 바꿀 수 있어요.", 403)
+        merged = apply_user_settings(requested)
+        for cfg in merged["species"].values():
             lo, hi = cfg["hsv_lower"], cfg["hsv_upper"]
             limits = (179, 255, 255)
             cfg["hsv_lower"] = [max(0, min(limits[i], lo[i])) for i in range(3)]
             cfg["hsv_upper"] = [max(0, min(limits[i], hi[i])) for i in range(3)]
             if any(cfg["hsv_lower"][i] >= cfg["hsv_upper"][i] for i in range(3)):
                 raise ApiError(f"{cfg['label']}: HSV 최솟값은 최댓값보다 작아야 해요.")
-            for a, b, label in (("temp_min", "temp_max", "온도"), ("humidity_min", "humidity_max", "습도"),
-                                ("soil_min", "soil_max", "토양 수분")):
-                if cfg[a] >= cfg[b]:
-                    raise ApiError(f"{cfg['label']}: {label} 최솟값은 최댓값보다 작아야 해요.")
-        gen = merged["general"]
-        gen["rate_window"] = max(1, min(10, gen["rate_window"]))
-        gen["env_lookback"] = max(1, min(10, gen["env_lookback"]))
-        gen["persist_count"] = max(1, min(gen["env_lookback"], gen["persist_count"]))
-        gen["scan_max_age_days"] = max(1, min(60, gen["scan_max_age_days"]))
-        gen["sign_max_age_days"] = max(1, min(14, gen["sign_max_age_days"]))
-        for cfg in merged["species"].values():
-            if not 0 < cfg["water_frequent_days"] < cfg["water_interval_days"]:
-                raise ApiError(f"{cfg['label']}: '물을 자주 줌' 간격은 0보다 크고 물주기 확인 간격보다 짧아야 해요.")
-            if not 0 < cfg["volume_slowdown_ratio"] < 100 or not 0 < cfg["slowdown_ratio"] < 100:
-                raise ApiError(f"{cfg['label']}: 생장 둔화 기준은 0%보다 크고 100%보다 작아야 해요.")
-        db.set_setting(conn(), thresholds_key(), merged)
+        stored = {"species": {k: {key: v[key] for key in ("hsv_lower", "hsv_upper")}
+                              for k, v in merged["species"].items()}}
+        db.set_setting(conn(), thresholds_key(), stored)
         conn().commit()
         return get_settings()
 

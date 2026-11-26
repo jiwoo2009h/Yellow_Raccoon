@@ -1,8 +1,12 @@
 """관리 추천 알고리즘의 기준값(임계값).
 
-여기 있는 숫자는 '초기값'입니다. 계획서 4단계에 따라 실험(바질 2개, 상추 2개)에서
-모은 데이터를 보고 앱의 [설정 > 추천 기준] 화면에서 고치면 됩니다.
-고친 값은 DB(settings 테이블)에 저장되고, 이 파일의 값은 '기본값으로 되돌리기'에 쓰입니다.
+관리 행동 추천 규칙에 쓰는 기준값(온도·습도·토양 수분·조도, 생장 판단, 잎 색·모양, 급수, 3D, 공통 판단 기준)은
+이 파일이 '유일한 출처'입니다. 개발자만 정할 수 있고, 앱 이용자는 [설정 > 추천 기준]에서 확인만 합니다.
+계획서 4단계에 따라 실험(바질 2개, 상추 2개)에서 모은 데이터를 보고
+이 파일의 숫자를 고친 뒤 서버를 다시 시작하면 모든 식물의 추천에 반영됩니다.
+
+예외: 식물 영역 색상(HSV) 범위는 추천 규칙이 아니라 사진 분석 설정이라 이용자가 앱에서 바꿀 수 있습니다
+(USER_EDITABLE_KEYS). 바꾼 값은 DB(settings 테이블)에 저장되고, 이 파일의 값은 '기본값으로 되돌리기'에 쓰입니다.
 """
 
 from copy import deepcopy
@@ -119,8 +123,34 @@ SPECIES_DEFAULTS = {
 SPECIES_KEYS = tuple(SPECIES_DEFAULTS.keys())
 
 
+# 이용자가 앱에서 바꿀 수 있는 항목(종류별). 나머지는 모두 추천 규칙이라 개발자만 바꿉니다.
+USER_EDITABLE_KEYS = ("hsv_lower", "hsv_upper")
+
+
 def default_thresholds():
     return {"general": deepcopy(GENERAL_DEFAULTS), "species": deepcopy(SPECIES_DEFAULTS)}
+
+
+def apply_user_settings(stored):
+    """기본값(추천 규칙) 위에 이용자가 저장한 항목 중 USER_EDITABLE_KEYS 만 덮어씁니다.
+    DB에 추천 규칙 값이 남아 있어도(예전 버전 등) 무시합니다."""
+    merged = default_thresholds()
+    user = merge_thresholds(stored)
+    for key, values in merged["species"].items():
+        for k in USER_EDITABLE_KEYS:
+            values[k] = user["species"][key][k]
+    return merged
+
+
+def locked_changes(requested):
+    """요청에 추천 규칙(개발자 전용) 값을 바꾸려는 내용이 있으면 그 항목 이름 목록을 돌려줍니다."""
+    asked = merge_thresholds(requested)
+    base = default_thresholds()
+    changed = [f"general.{k}" for k in base["general"] if asked["general"][k] != base["general"][k]]
+    for sp, values in base["species"].items():
+        changed += [f"{sp}.{k}" for k in values
+                    if k not in USER_EDITABLE_KEYS and k != "label" and asked["species"][sp][k] != values[k]]
+    return changed
 
 
 def merge_thresholds(stored):

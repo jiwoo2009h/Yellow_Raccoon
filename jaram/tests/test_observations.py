@@ -74,17 +74,18 @@ def test_photo_observation_follows_measurement(client):
     assert client.patch(f"/api/measurements/{mid}", json={"observation": {"signs": "wilt"}}).status_code == 400
 
 
-def test_settings_validate_frequent_watering_interval(client):
+def test_watering_thresholds_are_locked(client):
     th = client.get("/api/settings").get_json()["thresholds"]
     assert th["species"]["basil"]["water_frequent_days"] == 1.5 and th["general"]["sign_max_age_days"] == 3
     assert th["species"]["basil"]["temp_min"] == 20
-    th["species"]["basil"]["water_frequent_days"] = 3  # 물주기 확인 간격(3일)과 같으면 안 됨
-    assert client.put("/api/settings", json={"thresholds": th}).status_code == 400
-    th["species"]["basil"]["water_frequent_days"] = 1.2
-    th["general"]["sign_max_age_days"] = 99
-    saved = client.put("/api/settings", json={"thresholds": th}).get_json()["thresholds"]
-    assert saved["species"]["basil"]["water_frequent_days"] == 1.2
-    assert saved["general"]["sign_max_age_days"] == 14
+    th["species"]["basil"]["water_frequent_days"] = 1.2  # 급수 기준은 개발자만 바꿔요 (thresholds.py)
+    assert client.put("/api/settings", json={"thresholds": th}).status_code == 403
+    th["species"]["basil"]["water_frequent_days"] = 1.5
+    th["general"]["sign_max_age_days"] = 7
+    assert client.put("/api/settings", json={"thresholds": th}).status_code == 403
+    saved = client.get("/api/settings").get_json()["thresholds"]
+    assert saved["species"]["basil"]["water_frequent_days"] == 1.5
+    assert saved["general"]["sign_max_age_days"] == 3
 
 
 def test_csv_has_soil_state_and_signs(client):

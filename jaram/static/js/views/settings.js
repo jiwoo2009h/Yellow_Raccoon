@@ -114,13 +114,14 @@ export async function settingsView() {
       h('div', { class: 'field-label' }, '테마'),
       segmented([['system', '시스템'], ['light', '라이트'], ['dark', '다크']], getTheme(), (v) => setTheme(v))),
     h('h2', { class: 'section-title' }, '추천 기준'),
-    h('p', { class: 'caption', style: { margin: '-4px 4px 12px' } }, me ? '실험에서 모은 데이터를 보고 숫자를 조정하세요. 바꾸면 내 식물의 추천에 바로 반영돼요. (팀원마다 따로 저장돼요)' : '실험에서 모은 데이터를 보고 숫자를 조정하세요. 바꾸면 모든 식물의 추천에 바로 반영돼요.'),
+    h('p', { class: 'caption', style: { margin: '-4px 4px 12px' } }, '관리 추천 규칙의 기준값·특이 사항 키워드·규칙 파일은 개발자가 정하며 앱에서는 확인만 할 수 있어요. 식물 영역 색상(HSV) 범위는 각 식물 기준 화면에서 바꿀 수 있어요' + (me ? ' (팀원마다 따로 저장돼요).' : '.')),
     h('div', { class: 'list' },
       row({ href: '#/settings/species/basil', icon: 'leaf', accent: true, title: '바질', meta: desc(sp.basil) }),
       row({ href: '#/settings/species/lettuce', icon: 'sprout', accent: true, title: '상추', meta: desc(sp.lettuce) }),
       row({ href: '#/settings/species/other', icon: 'sprout', title: '기타 식물', meta: desc(sp.other) }),
       row({ href: '#/settings/general', icon: 'sliders', title: '공통 판단 기준', meta: `생장률 계산 간격 ${thresholds.general.rate_window}회 · 환경 지속 ${thresholds.general.persist_count}/${thresholds.general.env_lookback}회 · 3D ${thresholds.general.scan_max_age_days}일 · 특이사항 ${thresholds.general.sign_max_age_days}일` }),
-      row({ href: '#/settings/rules', icon: 'note', title: '추천 규칙 고치기', meta: '어떤 조건에서 어떤 추천을 낼지 글로 고쳐요 (rules.md)' })),
+      row({ href: '#/settings/symptoms', icon: 'warn', title: '특이 사항 키워드', meta: '증상 키워드와 증상 → 병해충 연결표' }),
+      row({ href: '#/settings/rules', icon: 'note', title: '추천 규칙 보기·시험', meta: '어떤 조건에서 어떤 추천이 나오는지 읽고, 고친 글을 검사·미리 보기 (rules.md)' })),
     h('h2', { class: 'section-title' }, '데이터'),
     h('div', { class: 'list' },
       h('a', { class: 'list-item', href: '/api/export.csv', download: '' },
@@ -188,6 +189,15 @@ const SECTIONS = [
   ]],
 ];
 
+// 관리 추천 규칙(기준값·특이 사항 키워드·규칙 파일)은 개발자가 정해요. 앱에서는 확인만 해요.
+const lockNotice = () => h('div', { class: 'notice', style: { marginTop: '16px' } },
+  h('span', { html: icons.info, style: { display: 'contents' } }),
+  h('div', { class: 'grow' }, '관리 추천 규칙은 개발자가 실험 데이터를 바탕으로 정해요. 앱에서는 확인만 할 수 있어요.'));
+
+const valueRow = (label, value, hint) => h('div', { class: 'list-item' },
+  h('div', { class: 'grow' }, h('div', { class: 'title' }, label), hint ? h('div', { class: 'meta' }, hint) : null),
+  value ? h('span', { class: 'value num' }, value) : null);
+
 export async function speciesSettingsView({ key }) {
   const screen = document.getElementById('screen');
   screen.append(topbar({ title: '' }), skeleton(90, 8), skeleton(320, 24));
@@ -195,11 +205,13 @@ export async function speciesSettingsView({ key }) {
   const t = thresholds.species[key];
   if (!t) { location.replace('#/settings'); return; }
 
-  const rangeRow = (base, unit) => h('div', { class: 'range-row' },
-    numberInput({ name: `${base}_min`, unit, value: t[`${base}_min`] }),
-    h('span', { class: 'sep' }, '~'),
-    numberInput({ name: `${base}_max`, unit, value: t[`${base}_max`] }));
+  const show = (k, unit) => {
+    const sp = unit === 'lux' ? ' ' : '';
+    if (['temp', 'humidity', 'soil'].includes(k)) return `${fmt(t[`${k}_min`])} ~ ${fmt(t[`${k}_max`])}${sp}${unit}`;
+    return `${fmt(t[k])}${sp}${unit}`;
+  };
 
+  // 식물 영역 색상(HSV)은 추천 규칙이 아니라 사진 분석 설정이라 이용자가 바꿀 수 있어요.
   const hsvBox = h('div');
   const hsvPreview = h('div', { class: 'hsv-bar', 'aria-hidden': 'true' });
   const drawHsv = () => {
@@ -221,41 +233,36 @@ export async function speciesSettingsView({ key }) {
     h('div', { class: 'field-label' }, '명도 V (0~255)'),
     h('div', { class: 'range-row' }, numberInput({ name: 'v_min', value: t.hsv_lower[2] }), h('span', { class: 'sep' }, '~'), numberInput({ name: 'v_max', value: t.hsv_upper[2] })));
 
-  const saveBtn = h('button', { class: 'btn btn-primary', type: 'submit' }, '저장하기');
+  const saveBtn = h('button', { class: 'btn btn-primary', type: 'submit' }, '색상 범위 저장하기');
   const form = h('form', {
     oninput: drawHsv,
     onsubmit: (e) => { e.preventDefault(); save(); },
   },
   h('div', { class: 'page-head', style: { paddingTop: '8px' } }, h('div', null,
     h('h1', { class: 'large-title' }, `${t.label} 기준`),
-    h('p', { class: 'subtitle' }, '관리 추천 알고리즘이 쓰는 임계값이에요.'))),
-  h('button', { class: 'list-item suggest-entry', type: 'button', onclick: () => suggestSheet(key, t.label, form) },
+    h('p', { class: 'subtitle' }, '관리 추천 알고리즘이 쓰는 임계값과 사진 분석 색상 범위예요.'))),
+  lockNotice(),
+  h('button', { class: 'list-item suggest-entry', type: 'button', onclick: () => suggestSheet(key, t.label) },
     h('div', { class: 'list-icon accent', html: icons.chart }),
-    h('div', { class: 'grow' }, h('div', { class: 'title' }, '실험 데이터로 기준 제안받기'),
-      h('div', { class: 'meta' }, '모은 기록의 통계로 제안값과 근거를 보여 줘요')),
+    h('div', { class: 'grow' }, h('div', { class: 'title' }, '실험 데이터로 본 기준 제안'),
+      h('div', { class: 'meta' }, '모은 기록의 통계로 제안값과 근거를 보여 줘요 (개발자 참고용)')),
     h('span', { class: 'chev', html: icons.chevron, style: { display: 'contents' } })),
   SECTIONS.map(([title, desc, items]) => [
     h('h2', { class: 'section-title' }, title),
-    h('section', { class: 'card' },
-      h('p', { class: 'card-sub', style: { marginBottom: '16px' } }, desc),
-      items.map(([k, label, unit, hint], i) => h('div', { style: { marginTop: i ? '18px' : 0 } },
-        ['temp', 'humidity', 'soil'].includes(k)
-          ? h('div', null, h('div', { class: 'field-label' }, `${label} 범위`), rangeRow(k, unit))
-          : field(label, numberInput({ name: k, unit, value: t[k] }), hint)))),
+    h('p', { class: 'caption', style: { margin: '-4px 4px 12px' } }, desc),
+    h('div', { class: 'list' }, items.map(([k, label, unit, hint]) =>
+      valueRow(['temp', 'humidity', 'soil'].includes(k) ? `${label} 범위` : label, show(k, unit), hint))),
   ]),
   h('h2', { class: 'section-title' }, '식물 영역 색상 (HSV)'),
   h('section', { class: 'card' },
-    h('p', { class: 'card-sub', style: { marginBottom: '16px' } }, '사진에서 이 범위의 색을 식물로 인식해요. 잎이 잘 잡히지 않으면 범위를 넓히고, 배경이 섞이면 좁혀 보세요.'),
+    h('p', { class: 'card-sub', style: { marginBottom: '16px' } }, '사진에서 이 범위의 색을 식물로 인식해요. 잎이 잘 잡히지 않으면 범위를 넓히고, 배경이 섞이면 좁혀 보세요. 이 값은 앱에서 바꿀 수 있어요.'),
     hsvBox),
-  h('button', { class: 'btn btn-text', type: 'button', style: { margin: '20px auto 0', display: 'flex' }, onclick: resetSpecies }, '기본값으로 되돌리기'),
+  h('button', { class: 'btn btn-text', type: 'button', style: { margin: '20px auto 0', display: 'flex' }, onclick: resetSpecies }, '색상 범위 기본값으로 되돌리기'),
   h('div', { class: 'cta' }, saveBtn));
 
   function collect(v) {
     const next = structuredClone(thresholds);
     const s = next.species[key];
-    for (const k of Object.keys(s)) {
-      if (k in v && v[k] !== null) s[k] = v[k];
-    }
     s.hsv_lower = [v.h_min, v.s_min, v.v_min].map((x, i) => x ?? t.hsv_lower[i]);
     s.hsv_upper = [v.h_max, v.s_max, v.v_max].map((x, i) => x ?? t.hsv_upper[i]);
     return next;
@@ -269,11 +276,6 @@ export async function speciesSettingsView({ key }) {
     let first = null;
     const bad = (name, msg) => { const el = input(name); if (el) { markInvalid(el, msg); first = first || el; } };
     form.querySelectorAll('input[type="number"]').forEach((el) => { if (v[el.name] === null) bad(el.name, '값을 입력해 주세요'); });
-    [['temp', '온도'], ['humidity', '습도'], ['soil', '토양 수분']].forEach(([k, label]) => {
-      const lo = v[`${k}_min`];
-      const hi = v[`${k}_max`];
-      if (lo !== null && hi !== null && lo >= hi) bad(`${k}_max`, `${label} 최댓값은 최솟값(${fmt(lo)})보다 커야 해요`);
-    });
     [['h', 179, '색상 H'], ['s', 255, '채도 S'], ['v', 255, '명도 V']].forEach(([c, max, label]) => {
       const lo = v[`${c}_min`];
       const hi = v[`${c}_max`];
@@ -282,13 +284,6 @@ export async function speciesSettingsView({ key }) {
       });
       if (lo !== null && hi !== null && lo >= hi) bad(`${c}_max`, `${label} 최댓값은 최솟값보다 커야 해요`);
     });
-    [['slowdown_ratio', '생장 둔화 기준'], ['volume_slowdown_ratio', '부피 둔화 기준']].forEach(([k, label]) => {
-      if (v[k] !== null && (v[k] <= 0 || v[k] >= 100)) bad(k, `${label}은 0보다 크고 100보다 작아야 해요`);
-    });
-    if (v.water_frequent_days !== null && v.water_interval_days !== null
-        && (v.water_frequent_days <= 0 || v.water_frequent_days >= v.water_interval_days)) {
-      bad('water_frequent_days', `0보다 크고 물주기 확인 간격(${fmt(v.water_interval_days)}일)보다 짧아야 해요`);
-    }
     if (first) {
       first.focus();
       first.scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -306,7 +301,7 @@ export async function speciesSettingsView({ key }) {
       const res = await api.saveSettings(next || collect(formValues(form)));
       const after = res.thresholds.species[key];
       hsvChanged = JSON.stringify([after.hsv_lower, after.hsv_upper]) !== before;
-      toast('기준을 저장했어요');
+      toast('색상 범위를 저장했어요');
       return true;
     });
     if (!saved) return;
@@ -330,10 +325,11 @@ export async function speciesSettingsView({ key }) {
   }
 
   async function resetSpecies() {
-    const ok = await confirmSheet({ title: `${t.label} 기준을 기본값으로 되돌릴까요?`, ok: '되돌리기' });
+    const ok = await confirmSheet({ title: `${t.label} 색상 범위를 기본값으로 되돌릴까요?`, ok: '되돌리기' });
     if (!ok) return;
     const next = structuredClone(thresholds);
-    next.species[key] = structuredClone(defaults.species[key]);
+    next.species[key].hsv_lower = structuredClone(defaults.species[key].hsv_lower);
+    next.species[key].hsv_upper = structuredClone(defaults.species[key].hsv_upper);
     await save(next);
   }
 
@@ -344,21 +340,18 @@ export async function speciesSettingsView({ key }) {
 // ------------------------------------------------------------ 기준값 제안
 const SUGGEST_DIGITS = { lux_min: 0, temp_min: 1, temp_max: 1, stagnation_rate: 1, volume_stagnation_rate: 1 };
 
-function suggestSheet(species, label, form) {
+function suggestSheet(species, label) {
   const from = h('input', { class: 'input', type: 'date', name: 'from', 'aria-label': '시작 날짜' });
   const to = h('input', { class: 'input', type: 'date', name: 'to', 'aria-label': '끝 날짜' });
   const body = h('div', { class: 'suggest-body' }, h('div', { class: 'spinner small', style: { margin: '24px auto' } }));
   let data = null;
-  const checks = new Map();
 
   const value = (it, v) => `${fmt(v, SUGGEST_DIGITS[it.key] ?? 0)}${it.unit === 'lux' ? ' lux' : it.unit}`;
 
   function itemRow(it) {
     const can = it.suggested !== null && it.changed;
-    const box = can ? h('input', { type: 'checkbox', checked: true, 'aria-label': `${it.label} 제안값 적용` }) : null;
-    if (box) checks.set(it.key, box);
-    return h('label', { class: `suggest-item${can ? '' : ' none'}` },
-      box || h('span', { class: 'suggest-dot', 'aria-hidden': 'true' }),
+    return h('div', { class: `suggest-item${can ? '' : ' none'}` },
+      h('span', { class: 'suggest-dot', 'aria-hidden': 'true' }),
       h('div', { class: 'grow' },
         h('div', { class: 'suggest-head' },
           h('span', { class: 'title' }, it.label),
@@ -371,7 +364,6 @@ function suggestSheet(species, label, form) {
   }
 
   async function load() {
-    checks.clear();
     body.replaceChildren(h('div', { class: 'spinner small', style: { margin: '24px auto' } }));
     try {
       data = await api.suggest(species, from.value, to.value);
@@ -385,98 +377,97 @@ function suggestSheet(species, label, form) {
         s.plants.length ? `${s.plants.join('·')} · 생장 구간 ${s.intervals}개 · 3D 구간 ${s.scan_intervals}개${s.first ? ` · ${dateShort(s.first)}–${dateShort(s.last)}` : ''}`
           : `${label} 식물이 아직 없어요.`),
       h('div', { class: 'suggest-list' }, data.items.map(itemRow)));
-    apply.disabled = checks.size === 0;
   }
 
-  const apply = h('button', { class: 'btn btn-primary', disabled: true }, '고른 값 입력칸에 넣기');
   sheet((close) => {
-    apply.onclick = async () => {
-      let n = 0;
-      for (const it of data.items) {
-        const box = checks.get(it.key);
-        if (!box || !box.checked) continue;
-        const input = form.querySelector(`input[name="${it.key}"]`);
-        if (!input) continue;
-        input.value = String(it.suggested);
-        input.closest('.input-wrap')?.classList.add('just-filled');
-        n += 1;
-      }
-      await close();
-      toast(n ? `${n}개 항목을 채웠어요. 확인하고 저장해 주세요` : '고른 항목이 없어요');
-    };
+    const done = h('button', { class: 'btn btn-primary', type: 'button', onclick: () => close() }, '닫기');
     return [
       h('h2', { class: 'sheet-title' }, `${label} 기준 제안`),
-      h('p', { class: 'sheet-desc' }, '모은 기록으로 통계를 내서 기준을 제안해요. 고른 값은 입력칸에만 채워지고, 저장하기를 눌러야 반영돼요.'),
+      h('p', { class: 'sheet-desc' }, '모은 기록으로 통계를 내서 기준을 제안해요. 관리 추천 기준은 개발자가 정하므로, 바꾸면 좋겠다 싶은 값은 개발자에게 알려 주세요 (thresholds.py 에 반영해요).'),
       h('div', { class: 'field-label' }, '기초 데이터 기간 (비우면 전체)'),
       h('div', { class: 'range-row' }, from, h('span', { class: 'sep' }, '~'), to),
       h('button', { class: 'btn btn-soft btn-sm', type: 'button', style: { marginTop: '10px' }, onclick: load }, '이 기간으로 다시 계산'),
       h('div', { style: { height: '16px' } }),
       body,
       h('p', { class: 'caption', style: { margin: '12px 2px 0' } }, '식물이 클수록 % 생장률은 자연히 낮아져요. 지금 생장 단계와 비슷한 기간을 고르면 더 알맞은 값이 나와요.'),
-      h('div', { class: 'actions' }, apply),
+      h('div', { class: 'actions' }, done),
     ];
   });
   load();
 }
 
-// ------------------------------------------------------------ 공통 기준
+// ------------------------------------------------------------ 공통 기준 (읽기 전용)
 export async function generalSettingsView() {
   const screen = document.getElementById('screen');
   screen.append(topbar({ title: '' }), skeleton(90, 8), skeleton(320, 24));
   const { thresholds } = await api.settings();
   const g = thresholds.general;
-  const saveBtn = h('button', { class: 'btn btn-primary', type: 'submit' }, '저장하기');
-  const form = h('form', {
-    onsubmit: (e) => {
-      e.preventDefault();
-      if (!checkNumbers(form)) return;
-      const v = formValues(form);
-      let first = null;
-      form.querySelectorAll('input[type="number"]').forEach((el) => {
-        const x = v[el.name];
-        const min = Number(el.min || 1);
-        const max = Number(el.max || 60);
-        const msg = x === null ? '값을 입력해 주세요' : !Number.isInteger(x) ? '정수로 입력해 주세요' : x < min || x > max ? `${min}~${max} 사이로 입력해 주세요` : null;
-        if (msg) { markInvalid(el, msg); first = first || el; }
-      });
-      if (v.persist_count !== null && v.env_lookback !== null && v.persist_count > v.env_lookback) {
-        const el = form.querySelector('input[name="persist_count"]');
-        markInvalid(el, '"지속" 횟수는 환경을 볼 기록 수보다 클 수 없어요');
-        first = first || el;
-      }
-      if (first) { first.focus(); return; }
-      const next = structuredClone(thresholds);
-      Object.assign(next.general, v);
-      withBusy(saveBtn, async () => {
-        await api.saveSettings(next);
-        toast('기준을 저장했어요');
-        if (screen.isConnected) location.hash = '#/settings';
-      });
-    },
-  },
-  h('div', { class: 'page-head', style: { paddingTop: '8px' } }, h('div', null,
-    h('h1', { class: 'large-title' }, '공통 판단 기준'),
-    h('p', { class: 'subtitle' }, '모든 식물에 똑같이 적용돼요.'))),
-  h('section', { class: 'card', style: { marginTop: '16px' } },
-    field('생장률 계산 간격', numberInput({ name: 'rate_window', unit: '회', value: g.rate_window, step: 1, min: 1, max: 10 }),
-      '최근 몇 번의 측정 구간을 묶어 생장률을 계산할지 정해요. 2이면 최근 사진 3장의 처음과 끝을 비교해요. 크게 할수록 측정 오차에 덜 흔들려요.'),
-    h('div', { style: { height: '18px' } }),
-    field('환경을 볼 기록 수', numberInput({ name: 'env_lookback', unit: '회', value: g.env_lookback, step: 1, min: 1, max: 10 }),
-      '최근 몇 번의 환경 기록을 함께 볼지 정해요.'),
-    h('div', { style: { height: '18px' } }),
-    field('"지속"으로 볼 횟수', numberInput({ name: 'persist_count', unit: '회', value: g.persist_count, step: 1, min: 1, max: 10 }),
-      '그중 몇 번 이상 기준을 벗어나야 "계속 벗어남"으로 판단할지 정해요. 센서 값이 한 번 튀어서 잘못 추천하는 것을 막아요.'),
-    h('div', { style: { height: '18px' } }),
-    field('3D 측정을 쓸 기간', numberInput({ name: 'scan_max_age_days', unit: '일', value: g.scan_max_age_days, step: 1, min: 1, max: 60 }),
-      '마지막 3D 측정이 이 기간 안에 있을 때만 부피 생장률로 판단해요. 오래된 3D 측정은 쓰지 않고 정면 사진으로 판단해요.'),
-    h('div', { style: { height: '18px' } }),
-    field('특이사항을 볼 기간', numberInput({ name: 'sign_max_age_days', unit: '일', value: g.sign_max_age_days, step: 1, min: 1, max: 14 }),
-      '시듦·웃자람 같은 식물 상태 기록을 며칠 동안 "지금 상태"로 보고 추천에 쓸지 정해요.'),
-    h('div', { style: { height: '18px' } }),
-    field('양분 부족을 확인할 기간', numberInput({ name: 'nutrient_check_days', unit: '일', value: g.nutrient_check_days, step: 1, min: 7, max: 90 }),
-      '잎이 노래지거나 옅어졌는데 이 기간 동안 비료를 준 기록이 없으면(기록 2주 이상) 양분 부족도 확인하라고 알려요.')),
-  h('div', { class: 'cta' }, saveBtn));
-  screen.replaceChildren(topbar({ title: '' }), form);
+  screen.replaceChildren(topbar({ title: '' }),
+    h('div', { class: 'page-head', style: { paddingTop: '8px' } }, h('div', null,
+      h('h1', { class: 'large-title' }, '공통 판단 기준'),
+      h('p', { class: 'subtitle' }, '모든 식물에 똑같이 적용돼요.'))),
+    lockNotice(),
+    h('div', { class: 'list', style: { marginTop: '16px' } },
+      valueRow('생장률 계산 간격', `${g.rate_window}회`,
+        '최근 몇 번의 측정 구간을 묶어 생장률을 계산할지예요. 2이면 최근 사진 3장의 처음과 끝을 비교해요. 크게 할수록 측정 오차에 덜 흔들려요.'),
+      valueRow('환경을 볼 기록 수', `${g.env_lookback}회`, '최근 몇 번의 환경 기록을 함께 볼지예요.'),
+      valueRow('"지속"으로 볼 횟수', `${g.persist_count}회`,
+        '그중 몇 번 이상 기준을 벗어나야 "계속 벗어남"으로 판단할지예요. 센서 값이 한 번 튀어서 잘못 추천하는 것을 막아요.'),
+      valueRow('3D 측정을 쓸 기간', `${g.scan_max_age_days}일`,
+        '마지막 3D 측정이 이 기간 안에 있을 때만 부피 생장률로 판단해요. 오래된 3D 측정은 쓰지 않고 정면 사진으로 판단해요.'),
+      valueRow('특이사항을 볼 기간', `${g.sign_max_age_days}일`,
+        '시듦·웃자람 같은 식물 상태 기록을 며칠 동안 "지금 상태"로 보고 추천에 쓸지예요. 사진 기록의 특이 사항(글)은 7일이에요.'),
+      valueRow('양분 부족을 확인할 기간', `${g.nutrient_check_days}일`,
+        '잎이 노래지거나 옅어졌는데 이 기간 동안 비료를 준 기록이 없으면(기록 2주 이상) 양분 부족도 확인하라고 알려요.')));
+}
+
+// ------------------------------------------------------------ 특이 사항 키워드 (읽기 전용)
+export async function symptomSettingsView() {
+  const screen = document.getElementById('screen');
+  screen.append(topbar({ title: '' }), skeleton(90, 8), skeleton(320, 24));
+  const { symptoms } = await api.settings();
+  const { rules } = symptoms;
+  const groups = [...new Set(symptoms.symptoms.map((x) => x.group))];
+  const symptomList = h('div', null,
+    h('p', { class: 'caption', style: { margin: '12px 4px 0' } },
+      '띄어쓰기는 무시해요. "/"는 또는, "+"는 같은 글에 함께 있어야 한다는 뜻이에요. "반점 없음"처럼 뒤에 부정하는 말이 오면 증상으로 보지 않아요.'),
+    h('p', { class: 'caption', style: { margin: '8px 4px 0' } },
+      '범위: 넓음(변색·반점처럼 여러 병해충에 두루 나타남) → 중간(갈색·곰팡이·벌레) → 좁음(암갈색·겹무늬·균핵·거미줄처럼 특정 병해충의 특징). '
+      + '좁은 증상을 찾으면 상위 증상도 함께 맞은 것으로 보지만, 점수는 가장 구체적인 증상 하나만 세요. 부위는 다른 증상과 함께 있을 때만 써요.'),
+    groups.map((g) => [
+      h('h2', { class: 'section-title' }, g),
+      h('div', { class: 'list' }, symptoms.symptoms.filter((x) => x.group === g).map((x) =>
+        h('div', { class: 'list-item' }, h('div', { class: 'grow' },
+          h('div', { class: 'title' }, x.label),
+          (x.level || x.parent) ? h('div', { class: 'meta' },
+            [x.level ? `범위 ${x.level}` : null, x.parent ? `상위: ${x.parent}` : null].filter(Boolean).join('  ·  ')) : null,
+          h('div', { class: 'meta' }, x.keywords.join('  ·  ')))))),
+    ]));
+  const pestList = h('div', null,
+    h('p', { class: 'caption', style: { margin: '12px 4px 0' } },
+      `찾은 증상의 점수를 병해충마다 더해요(좁은 특징 증상 3~4점, 중간 1~2점, 넓은 증상 1점). ${rules.min_score}점 이상이면 후보가 되고, `
+      + `${rules.care_score}점 이상이거나 ${rules.supported_score}점 이상이면서 잘 생기는 환경·생장 둔화가 함께 확인되면 관리 필요로 판단해요. `
+      + '증상이 하나뿐이라 후보가 없으면 관련 병해충과 구분하는 방법을 안내해요.'),
+    symptoms.pests.map((r) => [
+      h('h2', { class: 'section-title' }, `${r.name} · ${r.kind}`),
+      h('div', { class: 'list' },
+        r.symptoms.map((k) => valueRow(k.level ? `${k.label} (${k.level})` : k.label, `${k.weight}점`)),
+        r.env.length ? valueRow('잘 생기는 환경', '', r.env.join(' · ')) : null),
+      h('p', { class: 'caption', style: { margin: '8px 4px 0' } }, `출처: ${r.source}`),
+    ]));
+
+  let tab = 'symptoms';
+  const body = h('div');
+  const draw = () => body.replaceChildren(tab === 'symptoms' ? symptomList : pestList);
+  screen.replaceChildren(topbar({ title: '' }),
+    h('div', { class: 'page-head', style: { paddingTop: '8px' } }, h('div', null,
+      h('h1', { class: 'large-title' }, '특이 사항 키워드'),
+      h('p', { class: 'subtitle' }, '사진 기록의 특이 사항에서 증상을 찾고, 증상 조합으로 의심되는 병해충을 골라 관리 방법을 추천해요.'))),
+    lockNotice(),
+    h('div', { style: { marginTop: '16px' } },
+      segmented([['symptoms', '증상 키워드'], ['pests', '증상 → 병해충']], tab, (v) => { tab = v; draw(); })),
+    body);
+  draw();
 }
 
 // ------------------------------------------------------------ 알고리즘 설명
@@ -500,6 +491,8 @@ export async function algorithmView() {
     ['온도·습도가 범위 밖으로 지속  그리고  생장 감소', '환경 조건 확인 필요', 'care'],
     ['상추 꽃대  그리고  고온 지속', '서늘한 곳(15~20℃)으로, 꽃대 자르기', 'care'],
     ['벌레·곰팡이·반점', '통풍, 잎 겹침 정리, 상한 잎 제거', 'care'],
+    ['사진 기록의 특이 사항에 적은 증상 조합 (예: 갈색 반점+겹무늬, 밑동 물러짐+악취, 구멍+애벌레)', '의심 병해충 + 자료 기반 관리 방법 (잘 생기는 환경·생장 둔화가 함께 확인되면 관리)', 'care'],
+    ['특이 사항에 증상이 하나뿐 (예: 변색, 반점)', '관련 병해충과 구분하는 방법 안내 → 관찰', 'observe'],
     ['잎 끝이 마름 / 잎이 빽빽하게 겹침', '습도·급수 확인 / 솎아 주기', 'observe'],
     [`한 번에 투영 면적이 ${fmt(b.drop_alert, 0)}% 이상 감소`, '시듦 또는 촬영 오류 확인', 'observe'],
     [`잎이 노래짐  또는  사진의 잎 색상각이 약 일주일 전보다 ${fmt(b.leaf_hue_drop, 0)}° 이상 낮아짐·노란 잎 +${fmt(b.yellow_rise, 0)}%p (최근 2장 모두)`, '과습·빛·물 부족 추천이 있으면 그 근거로. 아니면 추위 → 비료 효과 확인 → 비료 과다 → 아래쪽 오래된 잎 → 양분 부족(비료 기록 없음) 순서로 확인', 'observe'],
@@ -519,7 +512,7 @@ export async function algorithmView() {
       h('p', { class: 'subtitle' }, '규칙 기반(IF → THEN)으로 판단해서 왜 그런 추천이 나왔는지 설명할 수 있어요.'))),
     h('a', { class: 'notice accent', href: '#/settings/rules', style: { marginTop: '4px' } },
       h('span', { html: icons.note, style: { display: 'contents' } }),
-      h('span', { class: 'grow' }, h('b', null, '규칙을 글로 고칠 수 있어요. '), '아래 표는 기본 규칙(rules.md)의 요약이에요. 조건·단계·문구를 바꾸려면 "추천 규칙 고치기"로 가세요.'),
+      h('span', { class: 'grow' }, h('b', null, '규칙은 글(rules.md)로 적혀 있어요. '), '아래 표는 그 요약이에요. 전체 규칙을 읽고 고친 글을 시험해 보려면 "추천 규칙 보기·시험"으로 가세요.'),
       h('span', { html: icons.chevron, style: { display: 'contents' } })),
     h('h2', { class: 'section-title' }, '처리 과정'),
     h('section', { class: 'card' }, h('div', { class: 'flow' }, flow.flatMap((x, i) => [i ? h('span', { class: 'arrow' }, '→') : null, h('span', { class: 'step' }, x)]))),
@@ -557,7 +550,7 @@ export async function algorithmView() {
       h('div', { class: 'if' }, h('span', { class: 'kw' }, 'IF'), cond),
       h('div', { class: 'then' }, h('span', { class: 'kw' }, 'THEN'), then, h('span', { class: `badge badge-${level}` }, label[level]))))),
     h('p', { class: 'caption', style: { margin: '8px 4px 0' } }, `환경값은 최근 ${g.env_lookback}번 중 ${g.persist_count}번 이상 기준을 벗어나야 '지속'으로 봐요. 생장 감소 = 둔화 또는 정체. 특이사항은 최근 ${g.sign_max_age_days}일, 흙 만져 보기는 최근 2일 기록을 써요.`),
-    h('p', { class: 'caption', style: { margin: '4px 4px 0' } }, '판단 근거: 농촌진흥청·농사로 허브·상추 재배 관리 자료 (물은 흙 표면이 마른 걸 확인하고 주기, 바질·로즈마리는 과습에 민감, 빛 부족 → 웃자람, 고온 → 상추 꽃대, 통풍 부족 → 병해).'),
+    h('p', { class: 'caption', style: { margin: '4px 4px 0' } }, '판단 근거: 농촌진흥청·농사로 허브·상추 재배 관리 자료 (물은 흙 표면이 마른 걸 확인하고 주기, 바질·로즈마리는 과습에 민감, 빛 부족 → 웃자람, 고온 → 상추 꽃대, 통풍 부족 → 병해). 병해충 증상은 농사로 병해충 정보를 바탕으로 했어요 (설정 → 특이 사항 키워드).'),
 
     h('h2', { class: 'section-title' }, '상태 구분'),
     h('div', { class: 'list' },
@@ -582,5 +575,5 @@ export async function algorithmView() {
       '따름/안 따름 무리의 다음 구간 생장률 변화, 회복 비율, 토양 수분 변화를 비교해요.',
     ]), h('a', { class: 'btn btn-text', href: '#/report/validation', style: { marginTop: '4px' } }, '검증 리포트 보기')),
 
-    h('p', { class: 'caption', style: { margin: '20px 4px 0' } }, '추천은 식물 상태를 의학적·생물학적으로 진단하는 것이 아니라, 측정한 데이터로 관리 행동을 결정할 때 참고할 수 있는 보조 정보예요. 모든 수식과 근거는 저장소의 jaram/ALGORITHM.md 문서에 정리돼 있어요.'));
+    h('p', { class: 'caption', style: { margin: '20px 4px 0' } }, '추천은 식물 상태를 의학적·생물학적으로 진단하는 것이 아니라, 측정한 데이터로 관리 행동을 결정할 때 참고할 수 있는 보조 정보예요. 기준값과 규칙은 개발자가 실험 데이터를 바탕으로 정하고, 모든 수식과 근거는 저장소의 jaram/ALGORITHM.md 문서에 정리돼 있어요.'));
 }

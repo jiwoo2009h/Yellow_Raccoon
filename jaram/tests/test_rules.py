@@ -54,15 +54,16 @@ def test_every_fact_is_computed_by_the_recommender(monkeypatch):
     seen = {}
     real = R.apply
 
-    def spy(rules, facts, values, reasons):
-        seen.update(facts=facts, values=values, reasons=reasons)
-        return real(rules, facts, values, reasons)
+    def spy(rules, facts, values, reasons, generated=None):
+        seen.update(facts=facts, values=values, reasons=reasons, generated=generated)
+        return real(rules, facts, values, reasons, generated)
 
     monkeypatch.setattr(R, "apply", spy)
     run()
     assert set(seen["facts"]) == set(R.FACTS)
     assert set(seen["values"]) == set(R.VALUES)
     assert set(seen["reasons"]) == set(R.REASONS)
+    assert set(seen["generated"]) == set(R.GENERATED)
 
 
 def test_condition_language():
@@ -174,16 +175,15 @@ def make_plant(client):
     return pid
 
 
-def test_rules_api_check_save_preview_reset(client):
+def test_rules_api_check_preview_but_no_save(client):
     pid = make_plant(client)
     got = client.get("/api/rules").get_json()
-    assert got["custom"] is False and got["check"]["ok"] and got["text"] == R.default_text()
+    assert got["custom"] is False and got["locked"] is True and got["check"]["ok"] and got["text"] == R.default_text()
     assert any(f["name"] == "흙마름" for f in got["reference"]["facts"])
+    assert any(g["name"] == "특이사항" for g in got["reference"]["generated"])
 
     bad = client.post("/api/rules/check", json={"text": RULE.replace("잘자람", "없는이름")}, headers=H).get_json()
     assert not bad["ok"] and bad["errors"][0]["line"] == 2
-    res = client.put("/api/rules", json={"text": "## x (x)\n- 조건: 없는이름\n"}, headers=H)
-    assert res.status_code == 400 and res.get_json()["errors"]
 
     new_text = """## 늘 보이는 규칙 (always)
 - 조건: 항상
@@ -197,25 +197,28 @@ def test_rules_api_check_save_preview_reset(client):
     # 미리 보기는 저장하지 않아요
     assert client.get(f"/api/plants/{pid}").get_json()["recs"][0]["code"] != "always"
 
-    saved = client.put("/api/rules", json={"text": new_text}, headers=H).get_json()
-    assert saved["custom"] is True
-    detail = client.get(f"/api/plants/{pid}").get_json()
-    assert detail["recs"][0]["code"] == "always" and detail["status"] == "observe"
-
-    back = client.post("/api/rules/reset", headers=H).get_json()
-    assert back["custom"] is False
+    # 관리 추천 규칙은 개발자만 rules.md 에서 바꿔요. 앱에서 저장하려 하면 거절해요.
+    res = client.put("/api/rules", json={"text": new_text}, headers=H)
+    assert res.status_code == 403 and "rules.md" in res.get_json()["error"]
     assert client.get(f"/api/plants/{pid}").get_json()["recs"][0]["code"] != "always"
+    assert client.post("/api/rules/reset", headers=H).get_json()["custom"] is False
 
 
-def test_rules_are_per_account(tmp_path):
+def test_old_saved_account_rules_are_ignored(tmp_path):
+    import db
     from app import create_app
 
     app = create_app(tmp_path / "data", password="가입코드123")
-    a, b = app.test_client(), app.test_client()
-    for c, name in ((a, "희승"), (b, "민수")):
-        c.post("/api/signup", json={"username": name, "password": "secret12", "code": "가입코드123"}, headers=H)
-    custom = RULE.replace("잘 자라요", "희승의 규칙")
-    assert a.put("/api/rules", json={"text": custom}, headers=H).status_code == 200
-    assert a.get("/api/rules").get_json()["text"] == custom
-    assert b.get("/api/rules").get_json()["custom"] is False
-    assert a.post("/api/rules/check", json={"text": custom}).status_code == 403  # 앱 헤더 없이 쓰기 금지
+    a = app.test_client()
+    a.post("/api/signup", json={"username": "희승", "password": "secret12", "code": "가입코드123"}, headers=H)
+    uid = a.get("/api/auth").get_json()["user"]["id"]
+    pid = make_plant(a)
+    c = db.connect(str(tmp_path / "data" / "jaram.db"))
+    db.set_setting(c, f"rules:{uid}", RULE.replace("잘 자라요", "예전에 저장한 규칙"))
+    c.commit()
+    c.close()
+    got = a.get("/api/rules").get_json()
+    assert got["custom"] is False and got["text"] == R.default_text()
+    recs = a.get(f"/api/plants/{pid}").get_json()["recs"]
+    assert all("예전에 저장한 규칙" not in r["title"] for r in recs)
+    assert a.post("/api/rules/check", json={"text": RULE}).status_code == 403  # 앱 헤더 없이 쓰기 금지

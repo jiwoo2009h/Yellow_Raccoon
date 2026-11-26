@@ -176,13 +176,18 @@ def test_thresholds_are_per_user(app_locked):
     a, b = app_locked.test_client(), app_locked.test_client()
     signup(a, "희승")
     signup(b, "민수", "pass1234")
+    # 관리 추천 기준값은 잠겨 있고, 사진 분석 색상(HSV) 범위만 사람마다 따로 저장돼요.
     th = a.get("/api/settings").get_json()["thresholds"]
+    default_hsv = list(th["species"]["basil"]["hsv_lower"])
     th["species"]["basil"]["soil_min"] = 22
+    assert a.put("/api/settings", json={"thresholds": th}, headers=H).status_code == 403
+    th["species"]["basil"]["soil_min"] = 30
+    th["species"]["basil"]["hsv_lower"] = [31, 40, 35]
     assert a.put("/api/settings", json={"thresholds": th}, headers=H).status_code == 200
-    assert a.get("/api/settings").get_json()["thresholds"]["species"]["basil"]["soil_min"] == 22
-    assert b.get("/api/settings").get_json()["thresholds"]["species"]["basil"]["soil_min"] == 30
+    assert a.get("/api/settings").get_json()["thresholds"]["species"]["basil"]["hsv_lower"] == [31, 40, 35]
+    assert b.get("/api/settings").get_json()["thresholds"]["species"]["basil"]["hsv_lower"] == default_hsv
     reset = a.post("/api/settings/reset", headers=H).get_json()["thresholds"]
-    assert reset["species"]["basil"]["soil_min"] == 30
+    assert reset["species"]["basil"]["hsv_lower"] == default_hsv
 
 
 def test_admin_tools_and_password_change(app_locked):

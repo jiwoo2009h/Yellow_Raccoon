@@ -387,6 +387,7 @@ def _note_recs(series, care_logs, t, env_state, now, growth_down, growth_reasons
 
     IF 특이 사항에서 증상(변색·반점·물러짐·구멍 …)을 찾았고
        그 증상 조합이 어떤 병해충의 특징과 맞음
+       (넓은 증상 '변색' 보다 구체적인 '암갈색'·'겹무늬' 가 더 큰 점수 → symptoms.py 증상 범위)
        (+ 그 병해충이 잘 생기는 환경이 기록으로 확인되거나 생장이 느려짐)
     THEN 가장 가능성 높은 병해충과 자료에 근거한 관리 방법을 추천하고,
          후보가 여럿이면 구분하는 특징을 함께 안내
@@ -430,7 +431,7 @@ def _note_recs(series, care_logs, t, env_state, now, growth_down, growth_reasons
     for cands in groups:
         top = cands[0]
         pest = top["pest"]
-        others = cands[1:3]
+        others = sx.close_rivals(cands)  # 점수가 비슷한 다른 후보만 '또는 …' 으로 안내
         group_codes = set().union(*(c["matched"] for c in cands)) & set(note["symptoms"])
         found_labels = [sx.SYMPTOMS[c]["label"] for c in note["symptoms"] if c in group_codes]
         reasons = [note_reason]
@@ -463,7 +464,8 @@ def _note_recs(series, care_logs, t, env_state, now, growth_down, growth_reasons
             lead = (f"기록한 증상({', '.join(found_labels)})으로 보면 " if found_labels else "")
             if others:
                 body = (lead + f"{', '.join(names)} 가능성이 있어요. 가장 가능성이 높은 {pest['name']} 기준으로 안내할게요. "
-                        + pest["body"] + " 구분하려면: " + " / ".join(c["pest"]["check"] for c in cands[:3] if c["pest"]["check"]) + ".")
+                        + pest["body"] + " 구분하려면: "
+                        + " / ".join(c["pest"]["check"] for c in [top, *others] if c["pest"]["check"]) + ".")
             else:
                 body = lead + f"{pest['name']} 가능성이 있어요. " + pest["body"]
 

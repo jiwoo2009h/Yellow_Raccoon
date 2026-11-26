@@ -201,23 +201,28 @@ export async function symptomSettingsView() {
   symptomList.append(
     h('p', { class: 'caption', style: { margin: '12px 4px 0' } },
       '띄어쓰기는 무시해요. "/"는 또는, "+"는 같은 글에 함께 있어야 한다는 뜻이에요. "반점 없음"처럼 뒤에 부정하는 말이 오면 증상으로 보지 않아요.'),
+    h('p', { class: 'caption', style: { margin: '8px 4px 0' } },
+      '범위: 넓음(변색·반점처럼 여러 병해충에 두루 나타남) → 중간(갈색·곰팡이·벌레) → 좁음(암갈색·겹무늬·균핵·거미줄처럼 특정 병해충의 특징). '
+      + '좁은 증상을 찾으면 상위 증상도 함께 맞은 것으로 보지만, 점수는 가장 구체적인 증상 하나만 세요. 부위는 다른 증상과 함께 있을 때만 써요.'),
     groups.map((g) => [
       h('h2', { class: 'section-title' }, g),
       h('div', { class: 'list' }, symptoms.symptoms.filter((x) => x.group === g).map((x) =>
         h('div', { class: 'list-item' }, h('div', { class: 'grow' },
           h('div', { class: 'title' }, x.label),
+          (x.level || x.parent) ? h('div', { class: 'meta' },
+            [x.level ? `범위 ${x.level}` : null, x.parent ? `상위: ${x.parent}` : null].filter(Boolean).join('  ·  ')) : null,
           h('div', { class: 'meta' }, x.keywords.join('  ·  ')))))),
     ]));
 
   pestList.append(
     h('p', { class: 'caption', style: { margin: '12px 4px 0' } },
-      `찾은 증상의 점수를 병해충마다 더해요(특징 증상 4점, 함께 나타나는 증상 1~3점). ${rules.min_score}점 이상이면 후보가 되고, `
+      `찾은 증상의 점수를 병해충마다 더해요(좁은 특징 증상 3~4점, 중간 1~2점, 넓은 증상 1점). ${rules.min_score}점 이상이면 후보가 되고, `
       + `${rules.care_score}점 이상이거나 ${rules.supported_score}점 이상이면서 잘 생기는 환경·생장 둔화가 함께 확인되면 관리 필요로 판단해요. `
       + '증상이 하나뿐이라 후보가 없으면 관련 병해충과 구분하는 방법을 안내해요.'),
     symptoms.pests.map((r) => [
       h('h2', { class: 'section-title' }, `${r.name} · ${r.kind}`),
       h('div', { class: 'list' },
-        r.symptoms.map((k) => valueRow(k.label, `${k.weight}점`)),
+        r.symptoms.map((k) => valueRow(k.level ? `${k.label} (${k.level})` : k.label, `${k.weight}점`)),
         r.env.length ? valueRow('잘 생기는 환경', '', r.env.join(' · ')) : null),
       h('p', { class: 'caption', style: { margin: '8px 4px 0' } }, `출처: ${r.source}`),
     ]));

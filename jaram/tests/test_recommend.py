@@ -260,6 +260,54 @@ def test_note_feedback_after_action():
     assert "note_powdery_mildew_done" in codes(noted("흰 가루가 잎에 묻어 있음", care=care))
 
 
+def test_specific_symptom_replaces_broader_one():
+    found, _ = find_symptoms("잎이 암갈색으로 변하고 겹무늬 반점")
+    assert {"dark_brown", "ring_spot"} <= set(found)
+    assert not {"brown", "discolor", "spot"} & set(found)  # 상위 증상은 따로 표시하지 않음
+    found, _ = find_symptoms("애벌레가 새잎을 갉아먹음")
+    assert "larva" in found and "insect" not in found and "small_insects" not in found
+
+
+def test_broad_symptom_scores_through_specific_word():
+    # '노랗게' 는 '변색 1점' 인 병해충에도 맞지만, 같은 줄기에서는 한 번만 셉니다.
+    from symptoms import PESTS_BY_CODE, _match
+    m = _match(PESTS_BY_CODE["cercospora"]["symptoms"], {"dark_brown": "암갈"})
+    assert set(m) == {"dark_brown"}  # brown·discolor 는 중복으로 세지 않음
+    m = _match(PESTS_BY_CODE["gray_mold"]["symptoms"], {"yellow": "노랗"})
+    assert set(m) == {"discolor"}
+
+
+def test_mid_level_word_alone_lists_related_pests():
+    r = noted("곰팡이가 폈어요")
+    assert note_codes(r) == ["note_symptom_watch"]
+    assert "잿빛곰팡이병" in r["recs"][0]["body"] and "노균병" in r["recs"][0]["body"]
+    r = noted("벌레가 있어요")
+    assert note_codes(r) == ["note_symptom_watch"] and "진딧물" in r["recs"][0]["body"]
+
+
+def test_detailed_notes_point_to_one_pest():
+    assert note_codes(noted("잎이 암갈색으로 마른 채로 썩었어요, 밑동"))[0] == "note_bottom_rot"
+    assert note_codes(noted("연한 갈색으로 물러 썩고 흰 곰팡이"))[0] == "note_sclerotinia"
+    assert note_codes(noted("잎 끝이 갈색으로 오그라들고 회색 곰팡이"))[0] == "note_gray_mold"
+    assert note_codes(noted("반점 가운데가 회색이고 겹무늬"))[0] == "note_cercospora"
+    assert note_codes(noted("잎 뒷면에 먼지 같은 작은 벌레", "basil"))[0] == "note_spider_mite"
+    assert note_codes(noted("잎이 끈적하고 검은 그을음"))[0] == "note_aphid"
+    r = noted("애벌레랑 똥이 있어요")
+    assert note_codes(r) == ["note_caterpillar"] and r["recs"][0]["level"] == "care"
+
+
+def test_weak_rivals_are_not_named_in_title():
+    r = noted("잎이 하얗게 변하고 흰 가루")
+    assert note_codes(r) == ["note_powdery_mildew"]
+    assert r["recs"][0]["title"] == "흰가루병 의심"
+
+
+def test_location_or_soil_words_alone_are_not_symptoms():
+    assert note_codes(noted("새 잎이 났어요")) == []
+    assert note_codes(noted("흙이 말랐어요")) == []
+    assert note_codes(noted("흙을 말리는 중")) == []
+
+
 def test_note_explains_slowdown_and_old_note_is_ignored():
     r = noted("거미줄이 보임", "basil", areas=SLOWING)
     assert "note_spider_mite" in codes(r) and "slowing" not in codes(r)
